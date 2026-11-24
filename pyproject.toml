@@ -1,0 +1,29 @@
+[project]
+name = "leg-facility-location"
+version = "0.1.0"
+description = "Health facility location with LLM-guided greedy (LEG) - course project"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "shapely>=2.0",
+    "rasterio>=1.3",
+    "numpy>=1.26",
+    "pycountry>=23.12",
+    "scipy>=1.11",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "responses>=0.25"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+markers = ["live: hits real APIs (run with: pytest -m live)"]
+addopts = "-m 'not live'"
