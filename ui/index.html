@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LEG data fetcher</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='1.5' y='1.5' width='13' height='13' fill='%23F3F4F1' stroke='%231D2B4A' stroke-width='1.5'/%3E%3Cpath d='M4 6h8M4 9h8M4 12h5' stroke='%231D2B4A' stroke-width='1.2'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <a class="skip" href="#manifest">Skip to fetch</a>
+    <header class="shell">
+      <h1 class="shell-title">LEG data fetcher</h1>
+      <div class="shell-meta">
+        <span class="shell-label">Cache folder</span>
+        <span class="mono" id="cache-root">…</span>
+        <span class="shell-key" id="key-status" role="status">Checking LLM key…</span>
+      </div>
+    </header>
+
+    <main class="cols">
+      <section class="pane pane-form" aria-label="Inputs" id="inputs">
+        <div class="tabs" role="tablist" aria-label="Area source">
+          <button role="tab" id="tab-new" aria-selected="true" aria-controls="panel-new">New area</button>
+          <button role="tab" id="tab-saved" aria-selected="false" aria-controls="panel-saved" tabindex="-1">Saved areas (<span id="saved-count">0</span>)</button>
+        </div>
+
+        <div role="tabpanel" id="panel-new" aria-labelledby="tab-new">
+          <section class="sec" id="sec-area">
+            <h2 class="sec-head"><button class="sec-toggle" aria-expanded="true" aria-controls="area-body"><span class="sec-num">1</span>Area<span class="sec-sum" id="area-sum"></span></button></h2>
+            <div class="sec-body" id="area-body">
+              <fieldset class="mode-pick">
+                <legend class="cap">Area mode</legend>
+                <div class="seg" role="radiogroup" aria-label="Area mode">
+                  <button type="button" role="radio" aria-checked="true" data-mode="snap">Whole districts <span class="rec">recommended</span></button>
+                  <button type="button" role="radio" aria-checked="false" data-mode="free">Free polygon</button>
+                </div>
+                <p class="hint" id="mode-hint"></p>
+              </fieldset>
+              <div class="form-grid">
+                <label class="field"><span class="cap">Name</span>
+                  <input id="area-name" class="input" autocomplete="off" placeholder="e.g. negev" required /></label>
+                <div class="field combo" id="country-combo">
+                  <label class="cap" for="country-input">Country</label>
+                  <input id="country-input" class="input" role="combobox" aria-expanded="false" aria-controls="country-list" aria-autocomplete="list" autocomplete="off" placeholder="Search name or ISO3" />
+                  <ul class="combo-list" id="country-list" role="listbox" hidden></ul>
+                </div>
+              </div>
+              <p class="detect" id="country-detect" hidden></p>
+              <div class="upload-row">
+                <button class="btn btn-quiet" id="upload-btn" type="button"><span class="ic" data-ic="upload"></span>Upload GeoJSON</button>
+                <span class="hint">or drop a file on the map</span>
+                <input type="file" id="upload-input" accept=".geojson,.json,application/geo+json,application/json" hidden />
+              </div>
+              <div id="upload-error" class="drop-error" hidden role="alert"></div>
+              <dl class="readout" id="readout" hidden>
+                <div><dt>Bounding box</dt><dd class="mono" id="ro-bbox"></dd></div>
+                <div><dt>Area</dt><dd id="ro-km2"></dd></div>
+                <div><dt>area_id</dt><dd class="mono" id="ro-id"></dd></div>
+              </dl>
+              <div id="area-msgs" class="msgs"></div>
+              <section id="snap-panel" class="snap-panel" aria-labelledby="snap-head" hidden></section>
+              <details class="advanced" id="advanced">
+                <summary><span class="ic" data-ic="chevron"></span>Advanced</summary>
+                <label class="field"><span class="cap">Minimum share inside (min_share, 0–1)</span>
+                  <input class="input" id="min-share" inputmode="decimal" value="0.5" aria-describedby="min-share-hint" />
+                  <span class="hint" id="min-share-hint">A district joins the area when at least this part of it is inside the drawing.</span></label>
+              </details>
+            </div>
+          </section>
+
+          <section class="sec" id="sec-profile">
+            <h2 class="sec-head"><button class="sec-toggle" aria-expanded="true" aria-controls="profile-body"><span class="sec-num">2</span>Country profile<span class="sec-sum" id="profile-sum"></span></button></h2>
+            <div class="sec-body" id="profile-body"><p class="hint">Appears when a country and an area are set.</p></div>
+          </section>
+
+          <section class="sec" id="sec-sources">
+            <h2 class="sec-head"><button class="sec-toggle" aria-expanded="true" aria-controls="sources-body"><span class="sec-num">3</span>Sources<span class="sec-sum" id="sources-sum"></span></button></h2>
+            <div class="sec-body" id="sources-body"></div>
+          </section>
+        </div>
+
+        <div role="tabpanel" id="panel-saved" aria-labelledby="tab-saved" hidden>
+          <label class="field"><span class="cap">Filter</span><input id="saved-filter" class="input" placeholder="Name, country or area_id" /></label>
+          <ul class="saved-list" id="saved-list"></ul>
+          <p class="hint">Areas are folders in the cache with at least one manifest. Opening one restores its name, country and shape.</p>
+        </div>
+      </section>
+
+      <section class="map-wrap" aria-label="Map" id="map-region">
+        <div class="map-tools" role="toolbar" aria-label="Draw tools" id="draw-tools"></div>
+        <div id="map" tabindex="0" aria-label="Map. With a draw tool active: arrows pan, Enter places a point at the crosshair, Backspace removes the last point, F finishes, Escape cancels."></div>
+        <div class="map-layers" id="map-layers" aria-label="Layers"></div>
+        <div class="map-zoom" id="map-zoom"></div>
+        <div class="crosshair" id="crosshair" hidden aria-hidden="true"></div>
+        <div class="map-hint" id="map-hint"></div>
+        <div class="map-banner" id="free-banner" role="status" hidden><span class="ic" data-ic="alert"></span>
+          <span><b>Free polygon.</b> Expert advice will be taken into account only for districts the polygon covers completely.</span></div>
+        <div class="drop-overlay" id="drop-overlay" hidden>Drop a GeoJSON file to use it as the area</div>
+        <p class="sr-only" id="map-summary" aria-live="polite"></p>
+        <div class="drawer" id="drawer" role="dialog" aria-modal="false" aria-labelledby="drawer-title" hidden>
+          <div class="drawer-head"><h2 id="drawer-title">manifest.json</h2>
+            <button class="btn btn-quiet" id="drawer-copy" type="button"><span class="ic" data-ic="copy"></span>Copy</button>
+            <button class="icon-btn" id="drawer-close" type="button" aria-label="Close manifest"><span class="ic" data-ic="x"></span></button></div>
+          <p class="hint mono" id="drawer-path"></p>
+          <pre class="code" id="drawer-code" tabindex="0"></pre>
+        </div>
+      </section>
+
+      <section class="pane pane-manifest" aria-label="Fetch" id="manifest">
+        <h2 class="manifest-head">Manifest</h2>
+        <ol class="lines" id="lines"></ol>
+        <p class="totals" id="totals" aria-live="polite"></p>
+        <div class="switch-row">
+          <button class="switch" role="switch" aria-checked="false" id="refresh" aria-describedby="refresh-hint"><span></span></button>
+          <div><label class="strong" for="refresh">Refresh</label><p class="hint" id="refresh-hint">Ignore the cache and download every included source. Pins still win.</p></div>
+        </div>
+        <button class="btn btn-primary btn-block" id="fetch-btn" type="button" aria-describedby="fetch-why">Fetch data</button>
+        <p class="why" id="fetch-why"></p>
+        <p class="hint" id="no-cancel">No cancel: once a download starts it can't be stopped safely.</p>
+        <div id="job-notes"></div>
+        <div id="dockets"></div>
+      </section>
+    </main>
+    <p class="sr-only" id="announcer" aria-live="polite"></p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

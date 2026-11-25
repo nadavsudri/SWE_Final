@@ -4,8 +4,10 @@ Providers:
 - geoboundaries: levels ADM1..ADM5 (good for most countries)
 - osm:           OSM admin_level numbers, e.g. "8" = municipalities in Israel
 
-Writes one file per level plus districts.geojson (= the last, finest level). Every feature has
-the same properties: name, unit_id, level, share_inside_area.
+Writes one file per level plus districts.geojson (= the last, finest level, cut to the area) and
+districts_full.geojson (the same districts with their whole, uncut shapes, used to snap the area to
+whole districts). Every feature has the same properties: name, unit_id, level, share_inside_area,
+fully_inside.
 """
 from __future__ import annotations
 
@@ -37,7 +39,8 @@ class BoundariesFetcher(Fetcher):
         self.overpass_url = overpass_url
 
     def params(self) -> dict:
-        p = {"provider": self.provider, "levels": list(self.levels)}
+        # geometry_version 2: snapshots also hold districts_full.geojson (older ones are re-fetched)
+        p = {"provider": self.provider, "levels": list(self.levels), "geometry_version": 2}
         if self.provider == "geoboundaries":
             p["simplified"] = self.simplified
         return p
@@ -51,6 +54,7 @@ class BoundariesFetcher(Fetcher):
             else:
                 fc, used = self._osm(area, level)
                 fname = f"osm_admin{level}.geojson"
+            full = clip_features(fc, area, level, keep_whole=True)
             fc = clip_features(fc, area, level)
             (out_dir / fname).write_text(json.dumps(fc, ensure_ascii=False))
             urls += used
@@ -59,6 +63,7 @@ class BoundariesFetcher(Fetcher):
         if not counts[self.levels[-1]]:
             raise ValueError(f"No {self.provider} level-{self.levels[-1]} units intersect the area")
         (out_dir / "districts.geojson").write_text(json.dumps(last, ensure_ascii=False))
+        (out_dir / "districts_full.geojson").write_text(json.dumps(full, ensure_ascii=False))
         return {"urls": urls, "params": self.params(),
                 "summary": {"units": counts, "districts": counts[self.levels[-1]]}}
 
@@ -111,8 +116,9 @@ def relation_to_polygon(rel: dict):
     return geom if not geom.is_empty else None
 
 
-def clip_features(fc: dict, area: Area, level: str) -> dict:
-    """Keep units that intersect the area; geometry cut to the area, original share kept."""
+def clip_features(fc: dict, area: Area, level: str, keep_whole: bool = False) -> dict:
+    """Keep units that intersect the area. Geometry is cut to the area, or kept whole with
+    keep_whole=True. share_inside_area = part of the unit inside the area; fully_inside = 100%."""
     out = []
     for f in fc["features"]:
         geom = shape(f["geometry"])
@@ -124,9 +130,11 @@ def clip_features(fc: dict, area: Area, level: str) -> dict:
         if clipped.area == 0:  # touches only along an edge
             continue
         src = f["properties"]
+        share = round(clipped.area / geom.area, 4) if geom.area else 0.0
         props = {"name": src.get("name"), "unit_id": src.get("unit_id"), "level": level,
-                 "share_inside_area": round(clipped.area / geom.area, 4) if geom.area else 0.0}
+                 "share_inside_area": share, "fully_inside": share >= 0.999}
         if "name_local" in src:
             props["name_local"] = src["name_local"]
-        out.append({"type": "Feature", "properties": props, "geometry": mapping(clipped)})
+        out.append({"type": "Feature", "properties": props,
+                    "geometry": mapping(geom if keep_whole else clipped)})
     return {"type": "FeatureCollection", "features": out}

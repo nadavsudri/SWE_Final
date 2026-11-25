@@ -74,6 +74,9 @@ def test_boundaries_keeps_intersecting_units(tmp_path, area):
     assert by_name["Inside"]["share_inside_area"] == 1.0
     assert by_name["Half"]["share_inside_area"] == 0.5
     assert json.loads((snap.path / "districts.geojson").read_text()) == out
+    full = json.loads((snap.path / "districts_full.geojson").read_text())["features"]
+    half = next(f for f in full if f["properties"]["name"] == "Half")
+    assert half["geometry"] == _square(34.5, 30.0, 35.5, 31.0) and half["properties"]["fully_inside"] is False
     assert snap.manifest["summary"]["districts"] == 2
 
 

@@ -11,7 +11,7 @@ import sys
 from leg.data import Area, SnapshotCache, fetch_all
 from leg.prep import PrepParams, build
 
-NEEDED = ["worldpop", "boundaries", "osm_facilities"]
+NEEDED = ["worldpop", "boundaries", "osm_facilities", "public_facilities"]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -43,7 +43,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     params = PrepParams(a.cell_km, a.radius_km, a.candidates)
-    out = build(snaps["worldpop"], snaps["boundaries"], snaps["osm_facilities"],
+    out = build(snaps["worldpop"], snaps["boundaries"], [snaps["osm_facilities"], snaps["public_facilities"]],
                 area.geometry, a.out, area.area_id, params)
     meta = json.loads((out / "meta.json").read_text())
     t, u = meta["totals"], meta["unassigned"]

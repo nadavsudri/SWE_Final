@@ -81,7 +81,8 @@ class OsmRoadsFetcher(Fetcher):
 
     DEFAULT_TYPES = ("motorway", "trunk", "primary", "secondary", "tertiary", "unclassified",
                      "residential", "service", "track", "path", "footway",
-                     "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link")
+                     "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link",
+                     "living_street", "road", "pedestrian", "bridleway", "cycleway", "steps")
 
     def __init__(self, highway_types: tuple[str, ...] = DEFAULT_TYPES, overpass_url: str = OVERPASS_URL):
         self.highway_types = tuple(highway_types)

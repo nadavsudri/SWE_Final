@@ -4,7 +4,7 @@ Output (data/processed/<area_id>/<run_id>/):
   cells.csv      cell_id, lon, lat, population, district_id, is_candidate, already_covered
   coverage.json  {candidate_cell_id: [cell_ids within reach]}
   districts.csv  per district: population, already covered population and %, cells, candidates,
-                 existing facilities
+                 existing facilities, share inside the area, fully_inside (1/0)
   meta.json      input snapshot ids, parameters, totals, unassigned cells
 
 Coverage rule (v1): straight-line distance <= radius_km. A cell is `already_covered` if an
@@ -93,7 +93,7 @@ def _xy_km(lon: np.ndarray, lat: np.ndarray, lat0: float) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- main step
-def build(worldpop: Snapshot, boundaries: Snapshot, facilities: Snapshot, area_geom,
+def build(worldpop: Snapshot, boundaries: Snapshot, facilities: Snapshot | list[Snapshot], area_geom,
           out_root: Path | str, area_id: str, params: PrepParams = PrepParams()) -> Path:
     lon, lat, pop, real_km = build_grid(worldpop.path / "population.tif", area_geom, params.cell_km)
     n = len(pop)
@@ -110,8 +110,9 @@ def build(worldpop: Snapshot, boundaries: Snapshot, facilities: Snapshot, area_g
     lat0 = float(np.mean(lat))
     xy = _xy_km(lon, lat, lat0)
     tree_cells = cKDTree(xy)
-    fac = [f["geometry"]["coordinates"] for f in
-           json.loads((facilities.path / "facilities.geojson").read_text())["features"]]
+    fac_snaps = facilities if isinstance(facilities, list) else [facilities]
+    fac = [f["geometry"]["coordinates"] for snap in fac_snaps for f in
+           json.loads((snap.path / "facilities.geojson").read_text())["features"]]
     covered = np.zeros(n, dtype=bool)
     fac_district = np.full(len(fac), -1, dtype=int)
     if fac:
@@ -147,7 +148,10 @@ def build(worldpop: Snapshot, boundaries: Snapshot, facilities: Snapshot, area_g
                      "coverage_pct": round(100 * dc / dp, 1) if dp else None,
                      "cells": int(m.sum()), "candidates": int((m & is_cand).sum()),
                      "existing_facilities": int((fac_district == j).sum()),
-                     "share_inside_area": f["properties"].get("share_inside_area")})
+                     "share_inside_area": f["properties"].get("share_inside_area"),
+                     # advice applies only to districts fully inside the area (free-polygon mode)
+                     "fully_inside": int(bool(f["properties"].get("fully_inside",
+                                                                  f["properties"].get("share_inside_area") == 1)))})
     with open(out / "districts.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]) if rows else ["district_id"])
         w.writeheader()
@@ -157,7 +161,7 @@ def build(worldpop: Snapshot, boundaries: Snapshot, facilities: Snapshot, area_g
     meta = {
         "area_id": area_id, "created_at": run_id, "params": asdict(params),
         "real_cell_km": round(real_km, 3),
-        "inputs": {s.manifest["source"]: s.id for s in (worldpop, boundaries, facilities)},
+        "inputs": {s.manifest["source"]: s.id for s in (worldpop, boundaries, *fac_snaps)},
         "totals": {"cells": n, "candidates": int(is_cand.sum()), "districts": len(feats),
                    "population": round(float(pop.sum())),
                    "already_covered_population": round(float(pop[covered].sum())),

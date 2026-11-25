@@ -55,31 +55,20 @@ PROMPT = """You configure a health-facility location study.
 Study area: {country} (ISO3 {iso3}), bbox (lon/lat W,S,E,N) {bbox}, about {area_km2:,} km2
 ({width_km:,} km x {height_km:,} km).
 
-The study places NEW health facilities to maximise the population within reach of one. A planner
-allocates a budget of facilities across administrative units ("districts"), then a greedy algorithm
-picks exact sites inside them. Use what you know about this country to decide two things:
+The study places NEW health facilities to maximise the population within reach of one. Facilities
+that already exist cover their surroundings, so you must decide which OpenStreetMap tags count as
+an existing facility that already serves the population.
+- Judge from this country's health system: where primary care is dense and nearly universal,
+  basic clinics do not define the gap, so count only the facilities whose distance matters
+  (e.g. hospitals, emergency care). Where access is sparse, every health facility matters,
+  so count all of them.
+- Keys allowed: amenity, healthcare, emergency. Value "*" means any value of that key.
 
-1. ADMIN UNITS used as districts.
-   - They should be units at which health services are actually planned or administered here.
-   - The area above should contain enough of them to make allocation meaningful: aim for roughly
-     10-100 units inside this bbox. Too few gives the planner nothing to decide; too many makes
-     each unit trivial. Use the area size and your knowledge of how large this country's units are.
-   - Sources: "geoboundaries" with levels ADM1..ADM5, or "osm" with OSM admin_level numbers as
-     strings (their meaning is country-specific; use this country's convention).
-   - List levels coarse-to-fine; the LAST one is the district level.
-
-2. EXISTING HEALTH FACILITIES: which OpenStreetMap tags count as a facility that already serves
-   the population, so its surroundings are already covered.
-   - Judge from this country's health system: where primary care is dense and nearly universal,
-     basic clinics do not define the gap, so count only the facilities whose distance matters
-     (e.g. hospitals, emergency care). Where access is sparse, every health facility matters,
-     so count all of them.
-   - Keys allowed: amenity, healthcare, emergency. Value "*" means any value of that key.
+(The administrative level used as districts is chosen by a separate rule, not by you.)
 
 Reply with ONLY this JSON:
-{{"admin_provider": "geoboundaries" | "osm", "admin_levels": ["..."],
-  "facility_tags": [["key", "value"], ...],
-  "rationale": "two sentences: why these units and why these facilities, for this country and area"}}"""
+{{"facility_tags": [["key", "value"], ...],
+  "rationale": "two sentences: why these facilities, for this country"}}"""
 
 
 def _area_km2(area: Area) -> float:
@@ -89,8 +78,10 @@ def _area_km2(area: Area) -> float:
 
 
 def validate(d: dict) -> CountryProfile:
-    provider = d.get("admin_provider")
-    levels = [str(x) for x in d.get("admin_levels", [])]
+    """Checks an LLM reply. The admin level is chosen by leg.data.levels, so admin fields are
+    optional here; when present they must still be valid."""
+    provider = d.get("admin_provider", DEFAULT_PROFILE.admin_provider)
+    levels = [str(x) for x in d.get("admin_levels", DEFAULT_PROFILE.admin_levels)]
     if provider == "geoboundaries":
         ok = levels and all(re.fullmatch(r"ADM[1-5]", lv) for lv in levels)
     elif provider == "osm":

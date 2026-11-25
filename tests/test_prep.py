@@ -77,6 +77,7 @@ def test_build_outputs(tmp_path, snaps):
 
     west = districts[0]
     assert west["name"] == "West" and int(west["population"]) == 49 and west["existing_facilities"] == "1"
+    assert west["fully_inside"] == "1"  # share_inside_area 1.0 in the fixture
     assert float(west["coverage_pct"]) == pytest.approx(100 * int(west["covered_population"]) / 49, abs=0.1)
     assert meta["inputs"] == {"worldpop": "s1", "boundaries": "s1", "osm_facilities": "s1"}
 
@@ -102,3 +103,16 @@ def test_bad_params(kw):
 def test_area_outside_raster(tmp_path, snaps):
     with pytest.raises(ValueError, match="No grid cells"):
         build(*snaps, box(40, 40, 41, 41), tmp_path / "out", "x", PrepParams())
+
+
+def test_facilities_from_several_sources_are_merged(tmp_path, snaps):
+    wp, bd, fc = snaps
+    fc2 = _snap(tmp_path / "pf" / "s9", "public_facilities")  # one facility in the NE corner
+    (fc2.path / "facilities.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [34.095, 30.995]}}]}))
+    out = build(wp, bd, [fc, fc2], AREA, tmp_path / "out", "isr_test", PrepParams(radius_km=1.5))
+    cells, _, _, meta = _read(out)
+    covered = {int(c["cell_id"]) for c in cells if c["already_covered"] == "1"}
+    assert 90 in covered and 9 in covered  # SW corner from the first source, NE from the second
+    assert meta["totals"]["existing_facilities"] == 2
+    assert meta["inputs"]["public_facilities"] == "s9"

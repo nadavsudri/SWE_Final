@@ -8,11 +8,11 @@ web
 
 ## Stack
 
-Delegated: a web front-end (Vite + React + TypeScript, MapLibre GL for the map) over a small FastAPI service that wraps the existing Python package (`leg.data`, `leg.prep`, and the LEG algorithm). Reason: the pipeline is already Python, so the API stays a thin layer, and a real map library is needed for drawing areas and showing cells, districts and sites. Deploy target: undecided (local demo is enough for now).
+Set by the team (24 Nov 2026): a thin FastAPI layer in `src/leg/api/` (no business logic; wraps `leg.data`) and a frontend in `ui/` with Vite 5 + TypeScript (no UI framework), MapLibre GL and terra-draw. Basemap: bundled Natural Earth country outlines, so the map works offline. Dependencies stay minimal; new ones need the team's OK. Local only: no login, no deployment.
 
 ## Users
 
-Course graders, instructors and classmates evaluating a 3rd-year software-engineering final project. They watch or click through a demo: they don't know the codebase, may not know the LEG paper in detail, and need to see the whole pipeline work on new data (Israel / Negev) in a few minutes.
+The student team, who use the tool to fetch and inspect data for new areas, and course staff watching or clicking through a demo on a laptop or projector. English, single local user. Neither group should need the CLI or the codebase to fetch an area and see what came back.
 
 ## Product Purpose
 
@@ -32,11 +32,17 @@ Not a generic GIS viewer: the point is the LEG mechanism, where an LLM supplies 
 
 ## Capabilities and Constraints
 
-First version of the UI:
-1. **Select an area**: pick a country, draw a polygon or bbox, trigger fetch + prep.
-2. **Run LEG and see sites**: run the LLM-guided greedy and show chosen facility locations on the map.
-3. **Coverage stats**: per-district population, covered population and coverage %, before vs. after.
-4. **Inspect data and snapshots**: cached snapshots per source, their age/TTL, and pinnable snapshot ids.
+Current UI scope (team decision, 24 Nov 2026): **the data fetcher only**, one screen. UX is in `docs/ux/fetcher/` (flow, screens + wireframes, states, accessibility).
+1. **Area**: name, country (searchable), one area drawn (rectangle/polygon, editable) or uploaded as GeoJSON; readout of bbox, km², area_id; warnings for large areas and areas outside the country (geoBoundaries ADM0), blocks for too-large and invalid areas. Thresholds are config constants.
+2. **Saved areas**: areas already in the cache, restorable.
+3. **Country profile**: default vs LLM, district provider/levels, facility tags, rationale; ask the LLM again (only with a key).
+4. **Sources**: include, options with validation, cache state (reuse vs download), pin a snapshot.
+5. **Fetch**: plan line, Refresh, per-source background jobs with status, error and Retry; no cancel.
+6. **Results**: per-source snapshot cards, manifest viewer, district and facility map layers.
+
+Out of scope until the team says otherwise: preprocessing, the algorithm, expert advice, run configuration, placement results, experiments, ILP, login, deployment. The LLM API key is never sent to the browser, logged or shown; the UI only knows whether one is set.
+
+Nothing may assume a specific country; the cached Negev area (ISR, bbox 34.5,30.5,35.45,31.6) is a test fixture only.
 
 Terminology: *cell* (~`cell_km` population block), *candidate*, *already covered*, *district*, *coverage radius* (default 10 km straight-line, ≈ the paper's 2 h walk), *snapshot*, *run*, *country profile*.
 
@@ -48,7 +54,7 @@ Product name in code: "LEG Facility Location". No logo, voice or visual identity
 
 ## Evidence on Hand
 
-- Real cached data for the Negev (`data/raw/isr_negev_*`).
+- Real cached data for the Negev (`data/raw/isr_negev_*`), used as the offline test fixture.
 - The source paper (AAMAS 2026).
 - No user research, testimonials or benchmark results; team names still to be added. Do not invent results or coverage numbers: show only what a real run produced.
 

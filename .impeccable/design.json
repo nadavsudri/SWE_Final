@@ -1,0 +1,378 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-24T17:12:13+00:00",
+  "title": "Design System: LEG data fetcher",
+  "extensions": {
+    "colorMeta": {
+      "harbour-navy": {
+        "role": "primary",
+        "displayName": "Harbour Navy",
+        "canonical": "#1d2b4a",
+        "oklch": "oklch(29.3% 0.060 265)",
+        "tonalRamp": [
+          "#070b15",
+          "#1d2535",
+          "#36425a",
+          "#526181",
+          "#7282a4",
+          "#97a5c1",
+          "#bec9e0",
+          "#e7effe"
+        ]
+      },
+      "carbon-blue": {
+        "role": "secondary",
+        "displayName": "Carbon Blue",
+        "canonical": "#2f4bb8",
+        "oklch": "oklch(46.0% 0.175 268)",
+        "tonalRamp": [
+          "#030726",
+          "#111f53",
+          "#253a85",
+          "#3a58ba",
+          "#597be1",
+          "#82a1f6",
+          "#aec7ff",
+          "#dbeeff"
+        ]
+      },
+      "customs-green": {
+        "role": "tertiary",
+        "displayName": "Customs Green",
+        "canonical": "#2e7d4f",
+        "oklch": "oklch(52.9% 0.106 155)",
+        "tonalRamp": [
+          "#001004",
+          "#062d18",
+          "#184e2f",
+          "#2b7148",
+          "#4f9368",
+          "#7eb48f",
+          "#acd5b8",
+          "#dbf7e3"
+        ]
+      },
+      "hold-red": {
+        "role": "tertiary",
+        "displayName": "Hold Red",
+        "canonical": "#b3261e",
+        "oklch": "oklch(50.1% 0.178 29)",
+        "tonalRamp": [
+          "#200000",
+          "#4a0604",
+          "#791913",
+          "#aa2e25",
+          "#d25346",
+          "#ec8375",
+          "#ffb1a4",
+          "#ffded5"
+        ]
+      },
+      "manifest-amber": {
+        "role": "tertiary",
+        "displayName": "Manifest Amber",
+        "canonical": "#8a5300",
+        "oklch": "oklch(49.4% 0.109 67)",
+        "tonalRamp": [
+          "#160700",
+          "#381e00",
+          "#5e3805",
+          "#865415",
+          "#aa763b",
+          "#c79c6e",
+          "#e5c2a0",
+          "#ffead2"
+        ]
+      },
+      "form-stock": {
+        "role": "neutral",
+        "displayName": "Form Stock",
+        "canonical": "#f3f4f1",
+        "oklch": "oklch(96.6% 0.004 122)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252524",
+          "#424240",
+          "#61615f",
+          "#828380",
+          "#a5a5a3",
+          "#c9c9c8",
+          "#eeeeed"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#cdd2da",
+        "oklch": "oklch(86.2% 0.012 260)",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#232528",
+          "#3f4247",
+          "#5d6168",
+          "#7e8389",
+          "#a2a5ab",
+          "#c6c9ce",
+          "#edeef2"
+        ]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "Ink Secondary",
+        "canonical": "#4a5671",
+        "oklch": "oklch(45.4% 0.047 266)",
+        "tonalRamp": [
+          "#080b13",
+          "#1f2532",
+          "#394255",
+          "#56617a",
+          "#76829d",
+          "#9ba5bb",
+          "#c1c9db",
+          "#e9effb"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "App name in the shell only."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Line, docket and saved-area names."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Default text, tabular numerals on."
+      },
+      "body-sm": {
+        "displayName": "Body small",
+        "purpose": "Hints, readouts, sub-lines (12.5px for sub-lines)."
+      },
+      "section-head": {
+        "displayName": "Section head",
+        "purpose": "Numbered section heads, MANIFEST, RESULTS, LAYERS; always on a 2px navy rule."
+      },
+      "label": {
+        "displayName": "Field caption",
+        "purpose": "Uppercase caption above each value in a ruled form box."
+      },
+      "stamp": {
+        "displayName": "Stamp",
+        "purpose": "Status words inside stamps."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Ids, hashes, paths, file names, manifest.json."
+      }
+    },
+    "shadows": [
+      {
+        "name": "float",
+        "value": "0 8px 20px rgb(29 43 74 / 0.16)",
+        "purpose": "Combobox list (0.18 alpha on map popups)."
+      },
+      {
+        "name": "drawer",
+        "value": "-10px 0 24px rgb(29 43 74 / 0.12)",
+        "purpose": "manifest.json drawer over the map."
+      }
+    ],
+    "rules": [
+      {
+        "name": "hairline",
+        "value": "1px solid #cdd2da",
+        "purpose": "Between rows and inside boxes."
+      },
+      {
+        "name": "box",
+        "value": "1px solid #1d2b4a",
+        "purpose": "Form boxes, dockets, pane edges, map overlays."
+      },
+      {
+        "name": "section",
+        "value": "2px solid #1d2b4a",
+        "purpose": "Under section heads; doubled around the totals line."
+      },
+      {
+        "name": "stamp",
+        "value": "1.5px border + 1px outline at 1.5px offset, currentColor",
+        "purpose": "Status stamps."
+      },
+      {
+        "name": "focus",
+        "value": "2px solid #2f4bb8, offset 2px",
+        "purpose": "Every interactive element."
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "All transitions and the stamp landing."
+      },
+      {
+        "name": "state",
+        "value": "150ms",
+        "purpose": "Button background, switch thumb, disclosure chevron."
+      },
+      {
+        "name": "stamp-land",
+        "value": "260ms, scale 1.35 to 1 with fade",
+        "purpose": "Once, when a manifest stamp's status changes."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "durations collapse to 0.01ms; skeleton shimmer off",
+        "purpose": "prefers-reduced-motion: reduce."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "1100px",
+        "purpose": "At or below: columns stack, map first at 60vh."
+      }
+    ],
+    "icons": {
+      "grid": "20px",
+      "stroke": "1.6",
+      "caps": "square",
+      "renderSizes": "12-18px",
+      "source": "ui/src/icons.ts"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Full-width navy Fetch block; the one primary action on the screen.",
+      "html": "<button class=\"ds-btn-primary\">Fetch data</button>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-btn-primary{display:flex;align-items:center;justify-content:center;width:320px;height:46px;background:var(--ink);color:#fff;border:1px solid var(--ink);border-radius:0;font:600 14px var(--f);letter-spacing:.1em;text-transform:uppercase;cursor:pointer;transition:background 150ms var(--ease)} .ds-btn-primary:hover{background:#2a3d66} .ds-btn-primary:active{background:#14203a} .ds-btn-primary:focus-visible{outline:2px solid var(--focus);outline-offset:2px} .ds-btn-primary:disabled{background:#a9b0bf;border-color:#a9b0bf;cursor:not-allowed}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Square white button with a 1px navy rule; quiet variant uses a hairline.",
+      "html": "<div style=\"display:flex;gap:8px\"><button class=\"ds-btn\">View manifest</button><button class=\"ds-btn ds-btn-quiet\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"square\"><path d=\"M10 13V4M6 8l4-4 4 4M4 16h12\"/></svg>Upload GeoJSON</button></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-btn{display:inline-flex;align-items:center;gap:6px;height:34px;padding:0 12px;border:1px solid var(--rule);background:#fff;color:var(--ink);border-radius:0;font:600 13px var(--f);cursor:pointer;transition:background 150ms var(--ease)} .ds-btn:hover{background:var(--carbon-soft)} .ds-btn:active{background:#d3daf1} .ds-btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px} .ds-btn-quiet{border-color:var(--hair)}"
+    },
+    {
+      "name": "Ruled Form Box",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Caption-above fields sharing one navy-ruled box; values in carbon; focus tints the cell.",
+      "html": "<div class=\"ds-form\"><label class=\"ds-field\"><span class=\"ds-cap\">Name</span><input class=\"ds-input\" value=\"negev\"></label><label class=\"ds-field\"><span class=\"ds-cap\">Country</span><input class=\"ds-input\" placeholder=\"Search name or ISO3\"></label></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-form{display:grid;grid-template-columns:1fr 1fr;width:344px;border:1px solid var(--rule);background:var(--sheet)} .ds-field{display:block;padding:6px 8px 8px} .ds-field+.ds-field{border-left:1px solid var(--rule)} .ds-field:focus-within{background:var(--carbon-soft)} .ds-cap{display:block;font:600 11px var(--f);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-2);margin-bottom:4px} .ds-input{width:100%;height:26px;border:0;padding:2px 0;background:transparent;color:var(--carbon);font:600 14px var(--f);outline:none} .ds-input::placeholder{color:var(--ink-3);font-weight:400}"
+    },
+    {
+      "name": "Status Stamp",
+      "kind": "custom",
+      "refersTo": "stamp",
+      "description": "Signature: boxed uppercase status word with a double rule, coloured by outcome, changing in place.",
+      "html": "<div style=\"display:flex;gap:10px;flex-wrap:wrap\"><span class=\"ds-stamp\">Download</span><span class=\"ds-stamp ds-ok\">Reused</span><span class=\"ds-stamp ds-carbon\">Pinned</span><span class=\"ds-stamp ds-bad\">Failed</span><span class=\"ds-stamp ds-warn\">Default · LLM call failed</span></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-stamp{display:inline-flex;align-items:center;padding:1px 6px;font:750 11px/16px var(--f);letter-spacing:.1em;text-transform:uppercase;white-space:nowrap;color:var(--ink);border:1.5px solid currentColor;outline:1px solid currentColor;outline-offset:1.5px;animation:ds-stamp 260ms var(--ease)} .ds-ok{color:var(--ok)} .ds-bad{color:var(--bad)} .ds-warn{color:var(--warn)} .ds-carbon{color:var(--carbon)} @keyframes ds-stamp{from{transform:scale(1.35);opacity:0}to{transform:none;opacity:1}} @media (prefers-reduced-motion:reduce){.ds-stamp{animation:none}}"
+    },
+    {
+      "name": "Manifest Line",
+      "kind": "custom",
+      "refersTo": "stamp",
+      "description": "Numbered consignment row with sub-line, stamp, and the running duration bar; totals between double navy rules.",
+      "html": "<div class=\"ds-man\"><div class=\"ds-line\"><span class=\"ds-no\">01</span><span><b>Population</b><span class=\"ds-sub\">WorldPop · 2026-11-24T170838Z</span></span><span class=\"ds-st ds-okc\">Reuse</span></div><div class=\"ds-line\"><span class=\"ds-no\">02</span><span><b>Districts</b><span class=\"ds-sub\">geoBoundaries ADM1 → ADM2</span><span class=\"ds-dur\"><i style=\"width:45%\"></i></span></span><span class=\"ds-st ds-carc\">Running</span></div><p class=\"ds-tot\">5 lines · 2 cleared from cache · 3 to ship</p></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-man{width:360px;font:400 14px/1.45 var(--f);color:var(--ink)} .ds-line{display:grid;grid-template-columns:26px 1fr auto;gap:8px;padding:8px 0;border-bottom:1px solid var(--hair);align-items:start} .ds-no{font-weight:700;color:var(--carbon);font-size:13px} .ds-line b{font-weight:650} .ds-sub{display:block;font-size:12.5px;color:var(--ink-2)} .ds-dur{display:block;height:4px;background:var(--hair);margin-top:6px;position:relative} .ds-dur i{position:absolute;inset:0 auto 0 0;background:var(--carbon)} .ds-st{padding:1px 6px;font:750 11px/16px var(--f);letter-spacing:.1em;text-transform:uppercase;border:1.5px solid currentColor;outline:1px solid currentColor;outline-offset:1.5px} .ds-okc{color:var(--ok)} .ds-carc{color:var(--carbon)} .ds-tot{margin:0;padding:8px 0;border-top:2px solid var(--rule);border-bottom:2px solid var(--rule);font-weight:650}"
+    },
+    {
+      "name": "Docket",
+      "kind": "card",
+      "refersTo": "docket",
+      "description": "Result card as a ruled box: head strip with number, title and stamp, carbon summary, key-values.",
+      "html": "<article class=\"ds-docket\"><div class=\"ds-dh\"><span class=\"ds-dn\">01</span><h3>Population</h3><span class=\"ds-ds\">Downloaded</span></div><p class=\"ds-sum\">749,331 people</p><dl class=\"ds-kv\"><dt>Snapshot</dt><dd>2026-11-24T170838Z</dd><dt>Fetched</dt><dd>24 Nov 2026, 17:08 UTC</dd></dl></article>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-docket{width:340px;border:1px solid var(--rule);background:#fff;font:400 14px/1.45 var(--f);color:var(--ink)} .ds-dh{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--rule)} .ds-dn{font-weight:700;color:var(--carbon);font-size:13px} .ds-dh h3{margin:0;flex:1;font-size:14px;font-weight:700} .ds-ds{color:var(--ok);padding:1px 6px;font:750 11px/16px var(--f);letter-spacing:.1em;text-transform:uppercase;border:1.5px solid currentColor;outline:1px solid currentColor;outline-offset:1.5px} .ds-sum{margin:0;padding:6px 12px 0;font-weight:650;color:var(--carbon)} .ds-kv{display:grid;grid-template-columns:auto 1fr;gap:3px 16px;margin:0;padding:4px 12px 8px;font-size:12.5px} .ds-kv dt{color:var(--ink-2)} .ds-kv dd{margin:0;font-family:var(--mono);font-size:12px}"
+    },
+    {
+      "name": "Note",
+      "kind": "custom",
+      "refersTo": "",
+      "description": "Bordered message with glyph and bold title; warn and block variants carry the outcome colour.",
+      "html": "<div class=\"ds-note ds-warnn\"><svg width=\"16\" height=\"16\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"square\"><path d=\"M10 3 2.5 16.5h15z\"/><path d=\"M10 8v4M10 14.2v.3\"/></svg><b>Partly outside the country</b><p>About 19% of the area is outside Israel. You can still fetch.</p></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-note{display:grid;grid-template-columns:18px 1fr;gap:2px 8px;width:340px;padding:8px 12px;border:1px solid var(--hair);background:#fff;font:400 13px/1.45 var(--f);color:var(--ink)} .ds-note svg{grid-row:span 2;margin-top:2px} .ds-note b{font-weight:650} .ds-note p{margin:0;grid-column:2;color:var(--ink-2)} .ds-warnn{border-color:#d9b77a;background:var(--warn-soft)} .ds-warnn svg,.ds-warnn b{color:var(--warn)}"
+    },
+    {
+      "name": "Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Facility-tag chip: stock fill, hairline, carbon value, square remove target.",
+      "html": "<span class=\"ds-chip\">amenity=hospital<button aria-label=\"Remove\"><svg width=\"14\" height=\"14\" viewBox=\"0 0 20 20\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"square\"><path d=\"M5 5l10 10M15 5 5 15\"/></svg></button></span>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--hair);background:var(--ground);padding:2px 4px 2px 8px;font:600 13px var(--f);color:var(--carbon)} .ds-chip button{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;background:none;padding:0;color:var(--ink-2);cursor:pointer} .ds-chip button:hover{color:var(--bad)} .ds-chip button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}"
+    },
+    {
+      "name": "Shell and Tabs",
+      "kind": "nav",
+      "refersTo": "shell",
+      "description": "56px navy header with uppercase app name and key status box; text tabs with 2px navy underline.",
+      "html": "<div style=\"width:560px\"><header class=\"ds-shell\"><span class=\"ds-title\">LEG data fetcher</span><span class=\"ds-key\">No LLM key: defaults will be used</span></header><div class=\"ds-tabs\"><button aria-selected=\"true\">New area</button><button>Saved areas (2)</button></div></div>",
+      "css": ":host{--ground:#f3f4f1;--sheet:#fbfbf9;--ink:#1d2b4a;--ink-2:#4a5671;--ink-3:#6b7489;--rule:#1d2b4a;--hair:#cdd2da;--carbon:#2f4bb8;--carbon-soft:#e6eaf7;--ok:#2e7d4f;--bad:#b3261e;--bad-soft:#fbeceb;--warn:#8a5300;--warn-soft:#fbf2e1;--focus:#2f4bb8;--f:Archivo,system-ui,-apple-system,'Segoe UI',sans-serif;--mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;--ease:cubic-bezier(0.16,1,0.3,1)} .ds-shell{height:56px;display:flex;align-items:center;padding:0 24px;background:var(--ink);color:var(--ground);font:400 13px var(--f)} .ds-title{font-size:16px;font-weight:700;letter-spacing:.04em;text-transform:uppercase} .ds-key{margin-left:auto;border:1px solid #8f9ab3;padding:3px 10px} .ds-tabs{display:flex;gap:20px;border-bottom:1px solid var(--hair);background:var(--sheet);padding:0 20px} .ds-tabs button{background:none;border:0;padding:8px 0;font:500 14px var(--f);color:var(--ink-2);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer} .ds-tabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--ink);font-weight:650} .ds-tabs button:hover{color:var(--ink)} .ds-tabs button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Bill of Lading",
+    "overview": "Every fetch is a consignment. The screen reads as one filled-in shipping form: cool form-stock paper under a harbour-navy shell, hairline-ruled boxes with small uppercase captions, values written in carbon blue as if typed through a carbon sheet, and a manifest whose numbered lines each receive a boxed, double-ruled status stamp. The world is printed-form clerical, never nostalgic: no paper texture, no rotated or smudged ink, no rounded cards.\n\nDensity is high and deliberate. Modules are separated by 1px rules rather than padding, columns never move, and status changes happen in place (a stamp swaps its word and color; it does not relocate). The map in the centre is the only open field and stays unobstructed apart from its edge-docked tool stacks.",
+    "keyCharacteristics": [
+      "Square everything: zero radius on every control, box and popup (map cluster badges are the single round exception).",
+      "Ruled structure: 1px hairlines between items, 1px navy around form boxes and dockets, 2px navy under section heads, double 2px navy around the totals line.",
+      "Two inks for meaning: navy for the form itself, carbon blue for anything the user or system filled in.",
+      "Status as a stamp: an uppercase boxed word with an outer second rule, coloured by outcome.",
+      "Archivo for all UI, with tabular numerals on by default; monospace only for ids, hashes, paths and file names."
+    ],
+    "rules": [
+      {
+        "name": "The Carbon Copy Rule",
+        "body": "Carbon blue means \"this was filled in\". Labels, headings and chrome are navy or ink-secondary; a value the user typed or the system resolved is carbon. Never use carbon for decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Stamp-Only Outcome Rule",
+        "body": "Green, red and amber carry outcome and nothing else. They appear in stamps, notes, field errors and the crosshair, never as fills for buttons, headers or panels.",
+        "section": "colors"
+      },
+      {
+        "name": "The Caption-Above Rule",
+        "body": "A field is a small uppercase caption above a carbon value, inside a ruled box. Do not place labels beside inputs or inside them as placeholders-only.",
+        "section": "typography"
+      },
+      {
+        "name": "The Mono-Is-Data Rule",
+        "body": "Monospace is reserved for strings a machine must match exactly. Prose, numbers with units and names stay in Archivo.",
+        "section": "typography"
+      },
+      {
+        "name": "The Fixed-Columns Rule",
+        "body": "Nothing reflows when status changes. Stamps change word and colour in place; columns and rows keep their positions so a running fetch is readable at a glance.",
+        "section": "layout"
+      },
+      {
+        "name": "The Ruled-Not-Raised Rule",
+        "body": "Panels, dockets, notes and buttons never carry a shadow. If it is part of the form, it is ruled; only transient overlays float.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do write every user- or system-filled value in carbon blue, and every label as an 11px uppercase caption above it.",
+      "Do separate items with 1px hairlines and close sections with a 2px navy rule; use ruled boxes instead of padded cards.",
+      "Do show status as a stamp that changes in place, and let it land with the 260ms stamp motion (disabled under reduced motion).",
+      "Do keep icons from the one authored set: 20px grid, 1.6 stroke, square caps, rendered at 14-18px.",
+      "Do keep the focus ring a 2px carbon outline at 2px offset on every interactive element."
+    ],
+    "donts": [
+      "Don't round corners on any control, panel or popup (0px); only map cluster badges are round.",
+      "Don't put shadows on panels, dockets, buttons or notes; shadows belong to the combobox list, popups and the drawer only.",
+      "Don't use green, red or amber outside stamps, notes, errors and the crosshair.",
+      "Don't add paper texture, rotated or distressed stamps, or a cream ground; the stock stays cool (form-stock).",
+      "Don't use monospace for prose, labels or numbers with units.",
+      "Don't set ink-tertiary text below 13px."
+    ]
+  }
+}

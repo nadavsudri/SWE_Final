@@ -1,0 +1,44 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "docs/ux/fetcher/wireframes-fetcher.html"
+        ],
+        "createdAt": "2026-11-24T16:31:47.670Z",
+        "reason": "Claude: full-bleed app-shell frames (.wf root, tab bar) in the Intent wireframe kit; edge-to-edge is the mocked layout"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "docs/ux/fetcher/wireframes-fetcher.html"
+        ],
+        "createdAt": "2026-11-24T16:31:47.690Z",
+        "reason": "Claude: h2/h3 are Intent viewer chrome (section label, frame plate) defined by the kit, not page content hierarchy"
+      },
+      {
+        "rule": "flat-type-hierarchy",
+        "value": "*",
+        "files": [
+          "ui/index.html"
+        ],
+        "createdAt": "2026-11-24T17:05:09.522Z",
+        "reason": "Claude: static scan of index.html can't see styles.css (imported by main.ts via Vite); the live-page scan of the rendered app does not report this rule"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "hanken grotesk",
+        "files": [
+          "docs/ux/fetcher/flow.html"
+        ],
+        "createdAt": "2026-11-24T17:12:02.772Z",
+        "reason": "Claude: Phase 1 UX diagram built with the Intent /journey template's own font stack; a planning document, not part of the shipped UI governed by DESIGN.md"
+      }
+    ]
+  }
+}

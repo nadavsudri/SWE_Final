@@ -1,0 +1,56 @@
+/* ── per-artifact layout: fetcher screen (kit tokens only) ── */
+.wf.app { display: flex; flex-direction: column; min-height: calc(var(--sp-23) * 10); }
+.wf .shell-bar { display: flex; align-items: center; gap: var(--sp-6);
+  padding: 0 var(--sp-6); height: var(--sp-14); border-bottom: 1px solid var(--w-border); }
+.wf .app-body { flex: 1; display: grid; grid-template-columns: 4fr 7fr 4fr; min-height: 0; }
+.wf .panel { padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-4); }
+.wf .panel.left { border-right: 1px solid var(--w-border); }
+.wf .panel.right { border-left: 1px solid var(--w-border); }
+.wf .sec { border-top: 1px solid var(--w-border); padding-top: var(--sp-4); }
+.wf .sec-head { display: flex; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-3); }
+.wf .map { position: relative; border: 0; border-radius: 0; min-height: 100%; }
+.wf .map-tl, .wf .map-tr, .wf .map-bl, .wf .map-br, .wf .map-c { position: absolute; display: flex; gap: var(--sp-2); }
+.wf .map-tl { top: var(--sp-4); left: var(--sp-4); }
+.wf .map-tr { top: var(--sp-4); right: var(--sp-4); flex-direction: column; align-items: flex-end; }
+.wf .map-bl { bottom: var(--sp-4); left: var(--sp-4); }
+.wf .map-br { bottom: var(--sp-4); right: var(--sp-4); flex-direction: column; }
+.wf .map-c { top: 40%; left: 0; right: 0; justify-content: center; }
+.wf .map-card { background: var(--w-canvas); border: 1px solid var(--w-border);
+  border-radius: var(--r-lg); padding: var(--sp-3); }
+.wf .toolgroup { display: flex; flex-direction: column; background: var(--w-canvas);
+  border: 1px solid var(--w-border); border-radius: var(--r-lg); padding: var(--sp-1); gap: var(--sp-1); }
+.wf .area-shape { position: absolute; top: calc(var(--sp-23) * 2); left: calc(var(--sp-23) * 2);
+  width: calc(var(--sp-23) * 3); height: calc(var(--sp-23) * 4);
+  border: 2px dashed var(--w-ink1); border-radius: var(--r-sm); }
+.wf .area-shape.bad { border-color: var(--w-error); width: calc(var(--sp-23) * 5); left: var(--sp-12); }
+.wf .vertex { position: absolute; width: var(--sp-3); height: var(--sp-3); background: var(--w-canvas);
+  border: 2px solid var(--w-accent); border-radius: var(--r-full); }
+.wf .district { position: absolute; border: 2px solid var(--w-ink1); }
+.wf .district-label { position: absolute; }
+.wf .cluster { position: absolute; min-width: var(--sp-8); height: var(--sp-8); padding: 0 var(--sp-2);
+  border-radius: var(--r-full); background: var(--w-canvas); border: 2px solid var(--w-ink1);
+  display: flex; align-items: center; justify-content: center; font-size: var(--t-xs); font-weight: 600; }
+.wf .fac { position: absolute; width: var(--sp-3); height: var(--sp-3); background: var(--w-ink1);
+  transform: rotate(45deg); }
+.wf .popup { position: absolute; max-width: calc(var(--sp-23) * 3); }
+.wf .src-row { border-bottom: 1px solid var(--w-border); padding: var(--sp-3) 0; }
+.wf .src-line { display: grid; grid-template-columns: auto 1fr auto; gap: var(--sp-3); align-items: center; }
+.wf .src-opts { margin-top: var(--sp-3); padding: var(--sp-3); background: var(--w-surface);
+  border-radius: var(--r-md); }
+.wf .prog-row { display: grid; grid-template-columns: var(--ic-lg) 1fr auto; gap: var(--sp-3);
+  align-items: start; padding: var(--sp-3) 0; border-bottom: 1px solid var(--w-border); }
+.wf .kv { display: grid; grid-template-columns: auto 1fr; column-gap: var(--sp-4); row-gap: var(--sp-1); }
+.wf .num { text-align: right; font-variant-numeric: tabular-nums; }
+.wf .mono { font-variant-numeric: tabular-nums; word-break: break-all; }
+.wf .drop { border: 1px dashed var(--w-border); border-radius: var(--r-lg); padding: var(--sp-4);
+  display: flex; flex-direction: column; align-items: center; gap: var(--sp-2); text-align: center; }
+.wf .drop.error { border-color: var(--w-error); }
+.wf .chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); }
+.wf .result-card .card-body { display: flex; flex-direction: column; gap: var(--sp-2); }
+.wf .codebox { background: var(--w-surface); border: 1px solid var(--w-border); border-radius: var(--r-md);
+  padding: var(--sp-3); font-size: var(--t-xs); line-height: var(--t-xs-lh); white-space: pre-wrap; word-break: break-all; }
+.wf .grid-2 > .field + .field, .wf .grid-3 > .field + .field { margin-top: 0; }
+.wf .grid-2, .wf .grid-3 { align-items: start; }
+.wf .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 75%; background: var(--w-canvas);
+  border-left: 1px solid var(--w-border); padding: var(--sp-5); display: flex; flex-direction: column; gap: var(--sp-3); }
+.wf .scrim-fill { position: absolute; inset: 0; }

@@ -57,7 +57,7 @@ def test_profile_feeds_fetcher_options(tmp_path, area, monkeypatch):
     p = validate(ISRAEL_REPLY)
     fetch_all(area, ["boundaries", "osm_facilities"], SnapshotCache(tmp_path), profile=p,
               options={"boundaries": {"levels": ("6", "8")}})
-    assert seen["boundaries"] == {"provider": "osm", "levels": ["6", "8"]}  # user option wins
+    assert seen["boundaries"] == {"provider": "osm", "levels": ["6", "8"], "geometry_version": 2}  # user option wins
     assert seen["osm_facilities"]["tags"] == [["amenity", "hospital"], ["emergency", "ambulance_station"]]
 
 
