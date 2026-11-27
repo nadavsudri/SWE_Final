@@ -80,6 +80,20 @@ export interface PrepJob {
   elapsed_s: number; eta_s: number | null; error: string | null; warnings: string[]; output: PrepOutput | null;
 }
 
+export interface AdviceItem {
+  advice: string; measurable: boolean; used: boolean; interpretation: string; passed: boolean;
+  errors: string[]; warnings: string[]; sample_scores: Record<string, number>; code: string;
+}
+export interface AdviceSet {
+  key: string; file: string; created_at: string; approved_by: "auto" | "person"; approved_at: string | null; model: string;
+  tokens: { input: number; output: number }; sample_plans: string[]; review_md: string; items: AdviceItem[];
+}
+export interface AdviceJob {
+  job_id?: string; status: "queued" | "running" | "done" | "failed"; stage: string | null; stage_label: string; stage_index: number;
+  stages: number; stage_done: number; stage_total: number; elapsed_s: number; error: string | null; key: string | null; result: AdviceSet | null;
+}
+export interface AdviceSetRow { key: string; file: string; created_at: string; approved_by: string; advice: number; used: number; not_measurable: number; failed: number }
+
 export class ApiError extends Error {
   constructor(public status: number, public detail: unknown) {
     super(ApiError.text(detail));
@@ -121,6 +135,12 @@ export const api = {
     call<SnapResp>("POST", "/api/area/snap", { area, options, area_mode, level_override }),
   prep: (body: { area_id: string; pinned?: Record<string, string>; max_minutes?: number; years?: number[] }) =>
     call<{ job_id: string }>("POST", "/api/prep", body),
+  advice: (body: { filename: string; text: string; area_id: string; run_id: string; budget?: number }) =>
+    call<{ job_id: string }>("POST", "/api/advice", body),
+  adviceJob: (id: string) => call<AdviceJob>("GET", `/api/advice/jobs/${id}`),
+  adviceSet: (key: string) => call<AdviceSet>("GET", `/api/advice/${encodeURIComponent(key)}`),
+  adviceSets: () => call<{ sets: AdviceSetRow[] }>("GET", "/api/advice"),
+  adviceRecheck: (key: string) => call<AdviceSet>("POST", `/api/advice/${encodeURIComponent(key)}/recheck`),
   prepJob: (id: string) => call<PrepJob>("GET", `/api/prep/${id}`),
   prepRuns: (areaId: string) => call<{ area_id: string; runs: PrepOutput[] }>("GET", `/api/prep/area/${encodeURIComponent(areaId)}`),
   levels: (area: AreaIn, area_mode: AreaMode) => call<LevelJob>("POST", "/api/area/levels", { area, area_mode }),

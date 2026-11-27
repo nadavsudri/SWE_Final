@@ -1,0 +1,88 @@
+{
+  "advice_file": "data/advice/uploads/9e118fac4472/advice_eth.txt",
+  "advice_sha256": "c36876710bc00f0aa2d3e1a57f4c0dfa5b6318699fa10f88924e7427e503d1f0",
+  "created_at": "2026-11-27T17:35:23+00:00",
+  "prep_run": "data/processed/eth_negev_6dfcdf57/2026-11-25T132613Z",
+  "budget_for_samples": 10,
+  "llm_usage": {
+    "model": "claude-sonnet-5-5",
+    "input_tokens": 1819,
+    "output_tokens": 1459
+  },
+  "approved_at": "2026-11-27T17:36:05+00:00",
+  "approved_by": "auto",
+  "sample_plans": [
+    "by uncovered population",
+    "all in the most populated district",
+    "all in the least covered district",
+    "spread one by one, most populated first",
+    "by population"
+  ],
+  "items": [
+    {
+      "advice": "Prioritise districts where fewer than 10% of people live within two hours of a facility.",
+      "measurable": true,
+      "interpretation": "Score is the share of new facilities placed in districts whose coverage before the plan is under 10%. If the plan has no new facilities, or no district is under 10%, the advice has nothing to act on and the score is 1.0.",
+      "code": "def score(plan):\n    ds = plan.get('districts', [])\n    total = 0\n    low = 0\n    anylow = False\n    for d in ds:\n        pop = d.get('population', 0)\n        if pop > 0:\n            pct = d['covered_before'] / pop * 100.0\n        else:\n            pct = d.get('coverage_before_pct', 0.0)\n        n = d.get('new_facilities', 0)\n        total += n\n        if pct < 10.0:\n            anylow = True\n            low += n\n    if total <= 0 or not anylow:\n        return 1.0\n    return float(max(0.0, min(1.0, low / total)))",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.9,
+          "all in the most populated district": 1.0,
+          "all in the least covered district": 1.0,
+          "spread one by one, most populated first": 0.9,
+          "by population": 0.9
+        }
+      },
+      "used": true
+    },
+    {
+      "advice": "Do not put more than three new facilities in one district.",
+      "measurable": true,
+      "interpretation": "Each district may have at most 3 new facilities. Score is 1 minus the share of new facilities that exceed that cap (the excess over 3 in each district).",
+      "code": "def score(plan):\n    total = 0\n    excess = 0\n    for d in plan.get('districts', []):\n        n = d.get('new_facilities', 0)\n        total += n\n        if n > 3:\n            excess += n - 3\n    if total <= 0:\n        return 1.0\n    return float(max(0.0, min(1.0, 1.0 - excess / total)))",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 1.0,
+          "all in the most populated district": 0.3,
+          "all in the least covered district": 0.3,
+          "spread one by one, most populated first": 1.0,
+          "by population": 1.0
+        }
+      },
+      "used": true
+    },
+    {
+      "advice": "Spread facilities across as many districts as possible.",
+      "measurable": true,
+      "interpretation": "Score is the number of districts that receive at least one new facility, divided by the most that could be reached, which is the smaller of the budget and the number of districts.",
+      "code": "def score(plan):\n    ds = plan.get('districts', [])\n    if not ds:\n        return 0.0\n    used = 0\n    total = 0\n    for d in ds:\n        n = d.get('new_facilities', 0)\n        total += n\n        if n > 0:\n            used += 1\n    budget = plan.get('budget', total)\n    if budget is None or budget <= 0:\n        budget = total\n    best = min(budget, len(ds))\n    if best <= 0:\n        return 1.0\n    return float(max(0.0, min(1.0, used / best)))",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.9,
+          "all in the most populated district": 0.1,
+          "all in the least covered district": 0.1,
+          "spread one by one, most populated first": 1.0,
+          "by population": 0.9
+        }
+      },
+      "used": true
+    },
+    {
+      "advice": "Prefer sites close to main roads.",
+      "measurable": false,
+      "interpretation": "Needs road locations and exact site positions. The plan only has district-level figures, so this cannot be scored.",
+      "code": null,
+      "check": null,
+      "used": false
+    }
+  ]
+}

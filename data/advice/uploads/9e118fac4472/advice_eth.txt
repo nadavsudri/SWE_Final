@@ -1,0 +1,5 @@
+# Expert advice for the Ethiopia test area
+1. Prioritise districts where fewer than 10% of people live within two hours of a facility.
+2. Do not put more than three new facilities in one district.
+- Spread facilities across as many districts as possible.
+- Prefer sites close to main roads.

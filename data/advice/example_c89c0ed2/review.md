@@ -1,17 +1,17 @@
 # Advice scoring review: example.txt
 
-Written by claude-sonnet-5-5 on 2026-11-27T17:07:49+00:00. Sample plans use budget 10 on data/processed/eth_negev_6dfcdf57/2026-11-25T132613Z.
-Status: in use (used automatically, 2026-11-27T17:30:50+00:00).
+Written by claude-sonnet-5-5 on 2026-11-27T17:53:06+00:00. Sample plans use budget 10 on data/processed/yem_egypt_ba184309/2026-11-27T174158Z.
+Status: in use (used automatically, 2026-11-27T17:53:06+00:00).
 
 ## 1. Every district should receive at least one new facility.
 
-Interpretation: Score is the number of districts with at least one new facility, divided by the most that could be reached (the smaller of the budget and the number of districts), capped at 1. A budget smaller than the number of districts is therefore not penalised for the districts it cannot reach.
+Interpretation: Score is the share of districts that get at least one new facility. It is normalised by the most that is possible, min(budget, number of districts), so a plan that spreads the budget over as many different districts as it can gets 1.0.
 
 Checks: passed
 
 | Sample plan | Score |
 |---|---|
-| by uncovered population | 0.900 |
+| by uncovered population | 0.500 |
 | all in the most populated district | 0.100 |
 | all in the least covered district | 0.100 |
 | spread one by one, most populated first | 1.000 |
@@ -19,170 +19,149 @@ Checks: passed
 
 ```python
 def score(plan):
-    ds = plan['districts']
+    ds = plan["districts"]
     n = len(ds)
     if n == 0:
         return 0.0
-    k = min(plan['budget'], n)
-    if k <= 0:
+    feasible = min(plan["budget"], n)
+    if feasible <= 0:
         return 0.0
-    got = 0
-    for d in ds:
-        if d['new_facilities'] >= 1:
-            got += 1
-    return float(min(1.0, got / k))
+    got = sum(1 for d in ds if d["new_facilities"] >= 1)
+    return float(min(1.0, got / feasible))
 ```
 
 ## 2. Give priority to districts where less than 30% of the people are within reach of a facility.
 
-Interpretation: Priority means the districts with coverage_before_pct below 30 get a new facility first. Score is the number of such districts that receive at least one new facility, divided by the most that could be served (the smaller of the facilities placed and the number of such districts). If there are no such districts, the score is 1.
+Interpretation: Low-coverage districts are those with coverage_before_pct below 30. Score is the number of them that receive at least one new facility, divided by the most that could be served (min(budget, number of such districts)). If no district is that poorly covered, the advice is trivially followed and the score is 1.
 
 Checks: passed
-
-| Sample plan | Score |
-|---|---|
-| by uncovered population | 0.900 |
-| all in the most populated district | 0.100 |
-| all in the least covered district | 0.100 |
-| spread one by one, most populated first | 1.000 |
-| by population | 0.900 |
-
-```python
-def score(plan):
-    ds = plan['districts']
-    low = []
-    for d in ds:
-        if d['coverage_before_pct'] < 30:
-            low.append(d)
-    if len(low) == 0:
-        return 1.0
-    total = 0
-    for d in ds:
-        total += d['new_facilities']
-    if total <= 0:
-        return 0.0
-    served = 0
-    for d in low:
-        if d['new_facilities'] >= 1:
-            served += 1
-    k = min(total, len(low))
-    return float(min(1.0, served / k))
-```
-
-## 3. No single district should receive more than a third of the new facilities.
-
-Interpretation: The cap per district is a third of the facilities placed, but never less than 1, since a small plan cannot split a single facility. Score is the share of facilities that sit within the cap, so a district that exceeds it loses only the excess.
-
-Checks: passed
+Warning: gives the same score (1.000) to every sample plan
 
 | Sample plan | Score |
 |---|---|
 | by uncovered population | 1.000 |
-| all in the most populated district | 0.333 |
-| all in the least covered district | 0.333 |
+| all in the most populated district | 1.000 |
+| all in the least covered district | 1.000 |
 | spread one by one, most populated first | 1.000 |
 | by population | 1.000 |
 
 ```python
 def score(plan):
-    ds = plan['districts']
-    total = 0
-    for d in ds:
-        total += d['new_facilities']
-    if total <= 0:
+    ds = plan["districts"]
+    low = [d for d in ds if d["coverage_before_pct"] < 30]
+    if len(low) == 0:
+        return 1.0
+    feasible = min(plan["budget"], len(low))
+    if feasible <= 0:
         return 0.0
-    cap = max(1.0, total / 3.0)
-    ok = 0.0
-    for d in ds:
-        ok += min(d['new_facilities'], cap)
-    return float(max(0.0, min(1.0, ok / total)))
+    served = sum(1 for d in low if d["new_facilities"] >= 1)
+    return float(min(1.0, served / feasible))
+```
+
+## 3. No single district should receive more than a third of the new facilities.
+
+Interpretation: Take the largest share of the new facilities that any one district receives. The score is 1 if that share is at most 1/3. Above 1/3 it falls linearly to 0 when one district gets everything.
+
+Checks: passed
+
+| Sample plan | Score |
+|---|---|
+| by uncovered population | 0.900 |
+| all in the most populated district | 0.000 |
+| all in the least covered district | 0.000 |
+| spread one by one, most populated first | 1.000 |
+| by population | 1.000 |
+
+```python
+def score(plan):
+    ds = plan["districts"]
+    total = sum(d["new_facilities"] for d in ds)
+    if total <= 0:
+        return 1.0
+    mx = max(d["new_facilities"] for d in ds)
+    share = mx / total
+    if share <= 1.0 / 3.0 + 1e-9:
+        return 1.0
+    return float(max(0.0, 1.0 - (share - 1.0 / 3.0) / (2.0 / 3.0)))
 ```
 
 ## 4. Districts that have no existing facility should be served before others.
 
-Interpretation: Districts with existing_facilities == 0 should get a new facility before districts that already have one. Score is the number of such districts that receive at least one new facility, divided by the most that could be served (the smaller of the facilities placed and the number of such districts). If every district already has a facility, the score is 1.
+Interpretation: Districts with existing_facilities == 0 should get new facilities first. Score is the number of them that receive at least one new facility, divided by the most that could be served (min(budget, number of such districts)). If every district already has a facility, the score is 1.
 
 Checks: passed
+Warning: gives the same score (1.000) to every sample plan
 
 | Sample plan | Score |
 |---|---|
-| by uncovered population | 0.889 |
-| all in the most populated district | 0.111 |
-| all in the least covered district | 0.111 |
+| by uncovered population | 1.000 |
+| all in the most populated district | 1.000 |
+| all in the least covered district | 1.000 |
 | spread one by one, most populated first | 1.000 |
-| by population | 0.889 |
+| by population | 1.000 |
 
 ```python
 def score(plan):
-    ds = plan['districts']
-    zero = []
-    for d in ds:
-        if d['existing_facilities'] == 0:
-            zero.append(d)
+    ds = plan["districts"]
+    zero = [d for d in ds if d["existing_facilities"] == 0]
     if len(zero) == 0:
         return 1.0
-    total = 0
-    for d in ds:
-        total += d['new_facilities']
-    if total <= 0:
+    feasible = min(plan["budget"], len(zero))
+    if feasible <= 0:
         return 0.0
-    served = 0
-    for d in zero:
-        if d['new_facilities'] >= 1:
-            served += 1
-    k = min(total, len(zero))
-    return float(min(1.0, served / k))
+    served = sum(1 for d in zero if d["new_facilities"] >= 1)
+    return float(min(1.0, served / feasible))
 ```
 
 ## 5. More populated districts should get more facilities than small ones.
 
-Interpretation: Score is the share of district pairs with different populations in which the more populous district gets more new facilities. A tie counts as half, and pairs with equal population are ignored.
+Interpretation: Look at all pairs of districts with different populations. A pair scores 1 if the larger district gets more new facilities, 0.5 if they get the same, and 0 if the larger gets fewer. The score is the average over pairs. A plan with no new facilities scores 0.
 
 Checks: passed
 
 | Sample plan | Score |
 |---|---|
-| by uncovered population | 0.689 |
-| all in the most populated district | 0.600 |
-| all in the least covered district | 0.444 |
-| spread one by one, most populated first | 0.500 |
-| by population | 0.689 |
+| by uncovered population | 0.396 |
+| all in the most populated district | 0.545 |
+| all in the least covered district | 0.476 |
+| spread one by one, most populated first | 0.760 |
+| by population | 0.771 |
 
 ```python
 def score(plan):
-    ds = plan['districts']
-    total = 0
-    for d in ds:
-        total += d['new_facilities']
+    ds = plan["districts"]
+    n = len(ds)
+    total = sum(d["new_facilities"] for d in ds)
     if total <= 0:
         return 0.0
-    n = len(ds)
-    pairs = 0
-    pts = 0.0
+    if n < 2:
+        return 1.0
+    acc = 0.0
+    cnt = 0
     for i in range(n):
         for j in range(i + 1, n):
-            a = ds[i]
-            b = ds[j]
-            if a['population'] == b['population']:
+            pi = ds[i]["population"]
+            pj = ds[j]["population"]
+            if pi == pj:
                 continue
-            if a['population'] > b['population']:
-                big = a
-                small = b
+            ni = ds[i]["new_facilities"]
+            nj = ds[j]["new_facilities"]
+            if pi > pj:
+                big, small = ni, nj
             else:
-                big = b
-                small = a
-            pairs += 1
-            if big['new_facilities'] > small['new_facilities']:
-                pts += 1.0
-            elif big['new_facilities'] == small['new_facilities']:
-                pts += 0.5
-    if pairs == 0:
+                big, small = nj, ni
+            cnt += 1
+            if big > small:
+                acc += 1.0
+            elif big == small:
+                acc += 0.5
+    if cnt == 0:
         return 1.0
-    return float(pts / pairs)
+    return float(acc / cnt)
 ```
 
 ## 6. Prefer locations close to the main roads.
 
-Interpretation: The plan has no road data and no facility coordinates, only district-level figures, so closeness to main roads cannot be scored.
+Interpretation: The plan has no road data and no facility locations inside districts, so closeness to main roads cannot be scored.
 
 Not measurable with the plan data: the planner reads it, it is not scored.

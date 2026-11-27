@@ -1,5 +1,5 @@
 import "./styles.css";
-import { api, ApiError, type AreaIn, type AreaMode, type Level, type LevelJob, type PrepJob, type PrepOutput, type SnapResp, type Config, type Country, type Geo, type Job, type JobRow, type PlanRow, type Profile, type SavedArea, type SourceSpec, type Validation } from "./api";
+import { api, ApiError, type AdviceItem, type AdviceJob, type AdviceSet, type AdviceSetRow, type AreaIn, type AreaMode, type Level, type LevelJob, type PrepJob, type PrepOutput, type SnapResp, type Config, type Country, type Geo, type Job, type JobRow, type PlanRow, type Profile, type SavedArea, type SourceSpec, type Validation } from "./api";
 import { hydrateIcons, icon } from "./icons";
 import { AreaMap, type Tool } from "./map";
 
@@ -57,6 +57,21 @@ const S = {
   prepError: "",
   prepRuns: [] as PrepOutput[],
   prepRunsFor: "",
+  advice: {
+    file: null as null | { name: string; text: string; items: string[]; error: string },
+    budget: 10,
+    job: null as AdviceJob | null,
+    jobId: "",
+    starting: false,
+    error: "",
+    result: null as AdviceSet | null,
+    sentText: "",                      // the text behind the result, for Rephrase
+    runId: "",
+    editor: null as null | { text: string; line: number },
+    sets: [] as AdviceSetRow[],
+    rechecking: false,
+    showUpload: false,
+  },
 };
 const PREP_NEEDS = ["worldpop", "boundaries", "friction"]; // what preprocessing reads besides facilities
 const prepRunning = () => S.prepStarting || S.prep?.status === "running" || S.prep?.status === "queued";
@@ -1034,6 +1049,26 @@ $("job-notes").addEventListener("click", (e) => {
   if ((e.target as HTMLElement).closest("#retry-all")) retry(S.job!.sources.filter((r) => r.status === "failed").map((r) => r.source));
 });
 
+// ── collapsible result panels (right column): header bar always visible, state kept while the page is open ──
+const panels: Record<string, boolean> = {};
+const panelOpen = (k: string) => panels[k] ?? true;
+function setPanel(k: string, open: boolean): void {
+  panels[k] = open;
+  const b = document.querySelector<HTMLElement>(`[data-panel="${k}"]`);
+  b?.setAttribute("aria-expanded", String(open));
+  document.getElementById(`rp-${k}`)?.classList.toggle("closed", !open);
+}
+function panelHtml(k: string, title: string, summary: string, body: string): string {
+  const open = panelOpen(k);
+  return `<h2 class="rp-head"><button type="button" class="rp-toggle" data-panel="${k}" aria-expanded="${open}" aria-controls="rp-${k}">
+      <span class="ic">${icon("chevron")}</span><span class="rp-title">${title}</span>${summary ? `<span class="rp-sum">${summary}</span>` : ""}</button></h2>
+    <div class="rp-body${open ? "" : " closed"}" id="rp-${k}"><div class="rp-inner"><div class="rp-pad">${body}</div></div></div>`;
+}
+$("manifest").addEventListener("click", (e) => {
+  const b = (e.target as HTMLElement).closest<HTMLElement>("[data-panel]");
+  if (b) setPanel(b.dataset.panel!, !panelOpen(b.dataset.panel!));
+});
+
 // ── preprocess: after a successful fetch, prepare the area for planning (leg.prep, server side) ──
 const prepArea = (): string => S.job?.area?.area_id ?? (S.job && !S.job.running ? S.job.area_id : "");
 
@@ -1054,7 +1089,7 @@ function prepMissing(): string[] {
 async function startPrep(): Promise<void> {
   const area_id = prepArea();
   if (!area_id || prepRunning()) return;
-  S.prepStarting = true; S.prepError = ""; renderPrep(); renderManifest();
+  S.prepStarting = true; S.prepError = ""; setPanel("fetch", false); panels.prep = true; renderPrep(); renderManifest();
   try {
     const r = await api.prep({ area_id, pinned: { ...(S.fetched[area_id] ?? {}) }, max_minutes: 120 });
     S.prep = { job_id: r.job_id, area_id, status: "queued", running: true, stage: null, stage_label: "", stage_index: 0, stages: 5,
@@ -1088,7 +1123,7 @@ async function pollPrep(): Promise<void> {
       announce(`Preprocessing step ${j.stage_index} of ${j.stages}: ${j.stage_label}.`);
     }
     S.prep = j;
-    if (j.status === "done") { announce(`Preprocessing finished: ${fmtInt(j.output?.totals.cells ?? 0)} cells.`); lastStage = ""; loadPrepRuns(true); }
+    if (j.status === "done") { announce(`Preprocessing finished: ${fmtInt(j.output?.totals.cells ?? 0)} cells.`); lastStage = ""; panels.prep = true; loadPrepRuns(true); }
     if (j.status === "failed") { announce("Preprocessing failed. Retry is available."); lastStage = ""; }
   } catch (e) {
     S.prepError = e instanceof ApiError && e.status === 404 ? "This run is unknown: the server was restarted. Finished runs are listed under Earlier runs." : (e as Error).message;
@@ -1102,7 +1137,8 @@ async function loadPrepRuns(force = false): Promise<void> {
   const id = prepArea();
   if (!id || (!force && S.prepRunsFor === id)) return;
   try { S.prepRuns = (await api.prepRuns(id)).runs; S.prepRunsFor = id; } catch { S.prepRuns = []; }
-  renderPrep();
+  renderPrep(); renderAdvice();
+  if (!S.advice.sets.length) loadAdviceSets();
 }
 
 const secs = (s: number) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
@@ -1161,7 +1197,9 @@ function renderPrep(): void {
   const earlier = runs.length ? `<details class="advanced" data-keep="prep-runs"><summary><span class="ic">${icon("chevron")}</span>Earlier runs (${runs.length})</summary>
       <ul class="runs">${runs.map((r) => `<li><span class="mono">${esc(r.run_id)}</span><span>${fmtInt(r.totals.cells)} cells</span>
         <span>${fmtInt(r.totals.population)} people · ${r.totals.population ? ((r.totals.covered_population / r.totals.population) * 100).toFixed(1) : "0"}% within 2 h</span><span>${fmtInt(r.totals.districts)} districts</span></li>`).join("")}</ul></details>` : "";
-  el.innerHTML = `<h2 id="prep-head">Prepare data for planning<span>${p?.status === "done" ? "done" : p?.status === "failed" ? "failed" : prepRunning() ? "running" : ""}</span></h2>${body}${earlier}`;
+  const psum = p?.status === "done" && p.output ? `${fmtInt(p.output.totals.cells)} cells · done` : p?.status === "failed" ? "failed"
+    : prepRunning() ? (p?.stage_index ? `step ${p.stage_index} of ${p.stages}` : "starting…") : missing.length ? `needs ${missing.map((x) => label(x).split(" (")[0].toLowerCase()).join(", ")}` : "ready";
+  el.innerHTML = panelHtml("prep", "Preprocessing", psum, body + earlier);
 }
 
 function prepPlain(raw: string): string {
@@ -1177,6 +1215,338 @@ $("prep").addEventListener("click", (e) => {
     S.included.add("friction"); persist(); renderSources();
     startFetch(["friction"]);
   }
+});
+
+// ── expert advice: automatic. An LLM writes one scoring function per advice, the checks decide which
+// count; this screen only shows how each advice will be measured, so the user can rephrase. ──
+const A = S.advice;
+const ADVICE_STAGES: [string, string][] = [["reading", "Reading your advice"], ["sample_plans", "Making example plans"],
+  ["writing_functions", "Writing scoring functions"], ["checking", "Checking them"], ["saving", "Saving"]];
+const adviceRun = (): string => S.prep?.status === "done" && S.prep.area_id === prepArea() ? S.prep.output?.run_id ?? "" : (S.prepRunsFor === prepArea() ? S.prepRuns[0]?.run_id ?? "" : "");
+const adviceRunning = () => A.starting || A.job?.status === "queued" || A.job?.status === "running";
+
+/** The same reading rules as the server: one advice per line, # comments, list markers stripped; or a JSON list. */
+function parseAdvice(name: string, text: string): { items: string[]; error: string } {
+  try {
+    let items: string[];
+    if (/\.json$/i.test(name)) {
+      const v = JSON.parse(text);
+      if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) return { items: [], error: "A .json advice file must be a list of strings." };
+      items = v;
+    } else {
+      items = text.split(/\r?\n/).filter((l) => l.trim() && !l.trim().startsWith("#")).map((l) => l.replace(/^\s*(\d+[.)]|[-*•])\s*/, "").trim());
+    }
+    items = items.map((x) => x.trim()).filter(Boolean);
+    if (!items.length) return { items, error: "No advice found in the file." };
+    const dup = items.find((x, i) => items.indexOf(x) !== i);
+    if (dup) return { items, error: `The same advice appears twice: “${dup}”.` };
+    if (items.length > 50) return { items, error: `${items.length} advice lines: the limit is 50.` };
+    return { items, error: "" };
+  } catch (e) {
+    return { items: [], error: `Not valid JSON (${(e as Error).message}).` };
+  }
+}
+
+async function chooseAdviceFile(f: File): Promise<void> {
+  if (!/\.(txt|json)$/i.test(f.name)) { A.file = { name: f.name, text: "", items: [], error: "Use a .txt file (one advice per line) or a .json list." }; renderAdvice(); return; }
+  if (f.size > 64 * 1024) { A.file = { name: f.name, text: "", items: [], error: "The file is larger than 64 KB." }; renderAdvice(); return; }
+  const text = await f.text();
+  A.file = { name: f.name, text, ...parseAdvice(f.name, text) };
+  renderAdvice();
+  announce(A.file.error ? `${f.name}: ${A.file.error}` : `${f.name}: ${A.file.items.length} advice read.`);
+}
+
+function adviceErrorPlain(msg: string): string {
+  if (/api key|ANTHROPIC/i.test(msg)) return "Add ANTHROPIC_API_KEY to .env and restart the server.";
+  return msg;
+}
+
+async function startAdvice(filename: string, text: string): Promise<void> {
+  const area_id = prepArea(), run_id = adviceRun();
+  if (!area_id || !run_id || adviceRunning()) return;
+  A.starting = true; A.error = ""; setPanel("fetch", false); setPanel("prep", false); panels.advice = true; renderAdvice();
+  try {
+    const r = await api.advice({ filename, text, area_id, run_id, budget: A.budget });
+    A.jobId = r.job_id; A.sentText = text; A.runId = run_id;
+    A.job = { status: "queued", stage: null, stage_label: "", stage_index: 0, stages: 5, stage_done: 0, stage_total: 0, elapsed_s: 0, error: null, key: null, result: null };
+    announce("Reading your advice.");
+  } catch (e) {
+    const err = e as ApiError;
+    const busy = (err.detail as { detail?: { job_id?: string } })?.detail?.job_id;
+    if (err.status === 409 && busy) { A.jobId = busy; A.job = { status: "running", stage: null, stage_label: "", stage_index: 0, stages: 5, stage_done: 0, stage_total: 0, elapsed_s: 0, error: null, key: null, result: null }; }
+    else A.error = adviceErrorPlain(err.message);
+  }
+  A.starting = false;
+  renderAdvice();
+  if (A.job) pollAdvice();
+}
+
+let adviceTimer = 0, adviceStage = "";
+async function pollAdvice(): Promise<void> {
+  clearTimeout(adviceTimer);
+  if (!A.jobId) return;
+  try {
+    const j = await api.adviceJob(A.jobId);
+    if (j.stage && j.stage !== adviceStage && j.status === "running") { adviceStage = j.stage; announce(`Step ${j.stage_index} of ${j.stages}: ${j.stage_label}.`); }
+    A.job = j;
+    if (j.status === "done" && j.result) {
+      A.result = j.result; A.editor = null; A.showUpload = false; adviceStage = ""; panels.advice = true; resetAdviceList();
+      const u = j.result.items.filter((i) => i.used).length;
+      announce(`Advice read: ${u} of ${j.result.items.length} will be scored.`);
+      loadAdviceSets();
+    }
+    if (j.status === "failed") { adviceStage = ""; announce("Reading the advice failed. Retry is available."); }
+  } catch (e) {
+    A.job = null; A.error = e instanceof ApiError && e.status === 404 ? "This job is unknown (the server restarted). Saved sets are under Earlier advice sets." : (e as Error).message;
+  }
+  renderAdvice();
+  if (A.job && (A.job.status === "queued" || A.job.status === "running")) adviceTimer = window.setTimeout(pollAdvice, 500);
+}
+
+async function loadAdviceSets(): Promise<void> {
+  try { A.sets = (await api.adviceSets()).sets; } catch { A.sets = []; }
+  renderAdvice();
+}
+
+function adviceCounts(r: AdviceSet) {
+  const n = r.items.length, used = r.items.filter((i) => i.used).length;
+  const notMeasurable = r.items.filter((i) => !i.measurable).length;
+  return { n, used, notMeasurable, failed: r.items.filter((i) => i.measurable && !i.used).length };
+}
+
+type AdviceFilter = "all" | "scored" | "nodata" | "rephrase";
+const AL = { filter: "all" as AdviceFilter, q: "", open: new Set<number>(), all: false };
+function resetAdviceList(): void { AL.filter = "all"; AL.q = ""; AL.open.clear(); AL.all = false; }
+const adviceKind = (it: AdviceItem): Exclude<AdviceFilter, "all"> => (it.used ? "scored" : !it.measurable ? "nodata" : "rephrase");
+const KIND_CHIP: Record<string, string> = {
+  scored: `<span class="stamp ok">Scored</span>`,
+  nodata: `<span class="stamp muted">Not scored — no data</span>`,
+  rephrase: `<span class="stamp warn">Not scored — rephrase</span>`,
+};
+
+/** The expanded part of a row: built only for open rows, so long lists stay cheap. */
+function adviceRowBody(it: AdviceItem, i: number, r: AdviceSet): string {
+  const why = it.used ? "" : !it.measurable
+    ? `<p class="adv-why">Needs data we don't have (e.g. roads). The planner still reads it.</p>`
+    : `<p class="adv-why warn"><span class="ic">${icon("alert")}</span>We couldn't build a reliable measure${it.errors.length ? `: ${esc(it.errors.join("; "))}` : ""}. Rephrase it to include it.</p>`;
+  const scores = Object.entries(it.sample_scores ?? {});
+  let examples = "";
+  if (it.used && scores.length) {
+    const hi = scores.reduce((a, b) => (b[1] > a[1] ? b : a)), lo = scores.reduce((a, b) => (b[1] < a[1] ? b : a));
+    examples = hi[1] === lo[1]
+      ? `<p class="adv-same"><span class="ic">${icon("info")}</span>Every example plan gets the same score, so this advice may not tell plans apart. You may want to rephrase it.</p>`
+      : `<dl class="adv-ex"><div><dt>Follows it</dt><dd>${esc(hi[0])} <b>${pct(hi[1])}</b></dd></div><div><dt>Breaks it</dt><dd>${esc(lo[0])} <b>${pct(lo[1])}</b></dd></div></dl>`;
+  }
+  const table = scores.length ? `<table class="adv-table"><thead><tr><th scope="col">Example plan</th><th scope="col" class="num">Score</th></tr></thead><tbody>${
+    (r.sample_plans.length ? r.sample_plans : scores.map(([k]) => k)).map((lbl) => `<tr><td>${esc(lbl)}</td><td class="num">${it.sample_scores[lbl] != null ? pct(it.sample_scores[lbl]) : "-"}</td></tr>`).join("")}</tbody></table>` : "";
+  const checks = [...it.errors.map((e) => `<li class="err">${esc(e)}</li>`), ...it.warnings.map((w) => `<li>${esc(w)}</li>`)].join("");
+  return `<div class="adv-rowbody" id="adv-row-${i}">
+    <p class="adv-text">“${esc(it.advice)}”</p>
+    ${it.measurable ? `<p class="adv-cap">How we read it</p><p class="adv-read">${esc(it.interpretation)}</p>` : ""}
+    ${why}${examples}
+    <div class="adv-rowacts"><button class="link" type="button" data-rephrase="${i}">Rephrase</button></div>
+    ${it.measurable ? `<details class="adv-more" data-keep="adv-${esc(r.key)}-${i}"><summary><span class="ic">${icon("chevron")}</span>Show details</summary>
+      ${table}${checks ? `<ul class="adv-checks">${checks}</ul>` : ""}${it.code ? `<pre class="code adv-code">${esc(it.code)}</pre>` : ""}</details>` : ""}
+  </div>`;
+}
+
+function adviceVisible(r: AdviceSet): number[] {
+  const q = AL.q.trim().toLowerCase();
+  return r.items.map((_, i) => i).filter((i) => {
+    const it = r.items[i];
+    if (AL.filter !== "all" && adviceKind(it) !== AL.filter) return false;
+    return !q || it.advice.toLowerCase().includes(q) || (it.interpretation ?? "").toLowerCase().includes(q);
+  });
+}
+
+function adviceListRows(r: AdviceSet): string {
+  const vis = adviceVisible(r);
+  if (!vis.length) return `<li class="adv-empty">No advice matches${AL.q ? ` “${esc(AL.q)}”` : ""}${AL.filter !== "all" ? " in this filter" : ""}.</li>`;
+  return vis.map((i) => {
+    const it = r.items[i], open = AL.open.has(i);
+    return `<li class="adv-row ${adviceKind(it)}${open ? " open" : ""}">
+      <button type="button" class="adv-rowhead" data-adv-row="${i}" aria-expanded="${open}" ${open ? `aria-controls="adv-row-${i}"` : ""}>
+        <span class="adv-num">#${i + 1}</span><span class="adv-line">${esc(it.advice)}</span>${KIND_CHIP[adviceKind(it)]}</button>
+      ${open ? adviceRowBody(it, i, r) : ""}</li>`;
+  }).join("");
+}
+
+/** Re-render only the list (filter, search, expand): the search box keeps focus and the list keeps its scroll. */
+function updateAdviceList(): void {
+  const r = A.result, box = document.getElementById("adv-list");
+  if (!r || !box) return;
+  const top = box.scrollTop;
+  box.innerHTML = adviceListRows(r);
+  box.scrollTop = top;
+  document.querySelectorAll<HTMLElement>("[data-adv-filter]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.advFilter === AL.filter)));
+  const n = adviceVisible(r).length;
+  const cnt = document.getElementById("adv-shown");
+  if (cnt) cnt.textContent = n === r.items.length ? "" : `${n} shown`;
+}
+
+function renderAdvice(): void {
+  const el = $("advice");
+  const id = prepArea();
+  el.hidden = !id;
+  if (el.hidden) return;
+  const run = adviceRun();
+  const running = adviceRunning();
+  const listTop = document.getElementById("adv-list")?.scrollTop ?? 0;
+  const searching = document.activeElement?.id === "adv-search" ? (document.activeElement as HTMLInputElement).selectionStart : null;
+  const asum = running ? "reading…" : A.job?.status === "failed" ? "failed" : A.result ? `${adviceCounts(A.result).used} of ${adviceCounts(A.result).n} scored` : run ? "upload a file" : "after preprocessing";
+  const parts: string[] = [];
+  if (!run) {
+    parts.push(`<p class="hint">Available once preprocessing is done: advice is measured on the prepared area.</p>`);
+  }
+  // progress
+  if (A.job && (A.job.status === "queued" || A.job.status === "running")) {
+    const j = A.job;
+    const idx = ADVICE_STAGES.findIndex(([k]) => k === j.stage);
+    parts.push(`<ol class="adv-steps">${ADVICE_STAGES.map(([k, lbl], i) => {
+      const st = i < idx ? "done" : i === idx ? "now" : "next";
+      const extra = i === idx && k === "writing_functions" ? `<span class="adv-indet" role="progressbar" aria-label="Writing scoring functions" aria-valuetext="in progress"><i></i></span><span class="lvl-sub">usually under a minute</span>`
+        : i === idx && k === "checking" && j.stage_total ? `<span class="lvl-sub">function ${Math.min(j.stage_done + 1, j.stage_total)} of ${j.stage_total}</span>` : "";
+      return `<li class="${st}"><span class="ic">${icon(st === "done" ? "check" : st === "now" ? "clock" : "queued")}</span><span>${i === idx && j.stage_label ? esc(j.stage_label) : lbl}${extra}</span></li>`;
+    }).join("")}</ol><p class="prep-time">${secs(j.elapsed_s)} elapsed${A.result ? " · the previous result stays below until this one is ready" : ""}</p>`);
+  } else if (A.job?.status === "failed") {
+    parts.push(`<div class="note block" role="alert"><span class="ic">${icon("alert")}</span><b>Couldn't read the advice</b><p>${esc(adviceErrorPlain(A.job.error ?? ""))}</p>
+      ${A.job.error && adviceErrorPlain(A.job.error) !== A.job.error ? "" : `<details class="line-raw" data-keep="adv-err"><summary>Error details</summary><code>${esc(A.job.error ?? "")}</code></details>`}
+      <div class="note-actions"><button class="btn btn-sm" type="button" id="adv-retry"><span class="ic">${icon("retry")}</span>Retry</button></div></div>`);
+  }
+  if (A.error) parts.push(`<div class="note block" role="alert"><span class="ic">${icon("alert")}</span><b>Couldn't start</b><p>${esc(A.error)}</p></div>`);
+  // rephrase editor
+  if (A.editor) {
+    parts.push(`<div class="adv-editor"><label class="field"><span class="cap">Your advice, one per line${A.editor.line >= 0 ? ` · line ${A.editor.line + 1} selected` : ""}</span>
+      <textarea class="textarea input" id="adv-edit" rows="9">${esc(A.editor.text)}</textarea></label>
+      <p class="hint">Reading it again writes new scoring functions with the LLM: a new job, a few cents.</p>
+      <div class="row-actions"><button class="btn btn-primary" type="button" id="adv-reread" ${running || !run ? "disabled" : ""}>Read again</button>
+      <button class="btn btn-quiet" type="button" id="adv-cancel">Cancel</button></div></div>`);
+  }
+  // upload card
+  if (run && !running && !A.editor && (!A.result || A.showUpload)) {
+    const f = A.file;
+    parts.push(`<div class="adv-drop" id="adv-drop">
+      <p class="hint">A .txt file with one advice per line (# starts a comment), or a .json list of strings. The system writes one scoring function per advice and checks it; advice that passes is used right away.</p>
+      <div class="row-actions" style="margin-top:0"><button class="btn" type="button" id="adv-choose"><span class="ic">${icon("upload")}</span>Choose file</button><span class="hint">or drop it here</span>
+        <input type="file" id="adv-file" accept=".txt,.json,text/plain,application/json" hidden /></div>
+      ${f ? `<p class="adv-fname"><b>${esc(f.name)}</b>${f.error ? "" : ` · ${f.items.length} advice`}</p>
+        ${f.error ? `<p class="field-error"><span class="ic">${icon("alert")}</span>${esc(f.error)}</p>` : `<ol class="adv-preview">${f.items.map((x) => `<li>${esc(x)}</li>`).join("")}</ol>`}` : ""}
+      <label class="field"><span class="cap">Budget for the example plans</span><input class="input" id="adv-budget" inputmode="numeric" value="${A.budget}" /></label>
+      <button class="btn btn-primary btn-block" type="button" id="adv-read" ${!f || f.error || !A.budget ? "disabled" : ""}>Read my advice</button></div>`);
+  }
+  // result
+  if (A.result) {
+    const r = A.result, c = adviceCounts(r);
+    const summary = [`${c.used} of ${c.n} will be scored`, c.notMeasurable ? `${c.notMeasurable} can't be measured with our data` : "", c.failed ? `${c.failed} need${c.failed === 1 ? "s" : ""} rephrasing` : ""].filter(Boolean).join(" · ");
+    parts.push(`<div class="adv-result${running ? " stale" : ""}">
+      <h3 class="adv-title">How your advice will be measured</h3>
+      <p class="prep-time">${esc(r.file)} · ${esc(when(r.created_at))} · ${esc(r.model)}</p>
+      <div class="row-actions" style="margin-top:0"><button class="btn btn-sm" type="button" id="adv-rephrase-all" ${running ? "disabled" : ""}>Rephrase</button>
+        <button class="btn btn-sm btn-quiet" type="button" id="adv-recheck" ${running || A.rechecking ? "disabled" : ""}>${A.rechecking ? "Checking…" : "Check again (no cost)"}</button>
+        ${!A.showUpload && !running ? `<button class="link" type="button" id="adv-new">Use another file</button>` : ""}</div>
+      <p class="adv-summary">${summary}</p>
+      <div class="adv-listhead">
+        <div class="adv-filters" role="group" aria-label="Show">${(["all", "scored", "nodata", "rephrase"] as AdviceFilter[]).map((k) => {
+          const n = k === "all" ? c.n : k === "scored" ? c.used : k === "nodata" ? c.notMeasurable : c.failed;
+          const lbl = { all: "All", scored: "Scored", nodata: "No data", rephrase: "Rephrase" }[k];
+          return `<button type="button" class="adv-filter" data-adv-filter="${k}" aria-pressed="${AL.filter === k}" ${n || k === "all" ? "" : "disabled"}>${lbl} <b>${n}</b></button>`;
+        }).join("")}</div>
+        <div class="adv-tools"><label class="sr-only" for="adv-search">Search advice and how it was read</label>
+          <input class="input" id="adv-search" type="search" placeholder="Search advice" value="${esc(AL.q)}" autocomplete="off" />
+          <button class="btn btn-sm btn-quiet" type="button" id="adv-expand">Expand all</button><button class="btn btn-sm btn-quiet" type="button" id="adv-collapse">Collapse all</button>
+          <span class="hint" id="adv-shown" aria-live="polite"></span></div>
+      </div>
+      <ol class="adv-list" id="adv-list" aria-label="Advice, in file order">${adviceListRows(r)}</ol></div>`);
+  }
+  if (run || A.result) parts.push(`<div class="adv-next"><button class="btn btn-block" type="button" disabled aria-describedby="adv-next-why">Continue to planning</button><p class="hint" id="adv-next-why">Coming next. Advice never blocks planning: what isn't scored is still read by the planner.</p></div>`);
+  const others = A.sets.filter((x) => x.key !== A.result?.key);
+  if (others.length) parts.push(`<details class="advanced" data-keep="adv-sets"><summary><span class="ic">${icon("chevron")}</span>Earlier advice sets (${others.length})</summary>
+    <ul class="runs">${others.map((x) => `<li><button class="link" type="button" data-adv-open="${esc(x.key)}">${esc(x.file)}</button><span>${esc(when(x.created_at))}</span>
+      <span>${x.used} of ${x.advice} scored${x.not_measurable ? ` · ${x.not_measurable} not measurable` : ""}${x.failed ? ` · ${x.failed} to rephrase` : ""}</span><span></span></li>`).join("")}</ul></details>`);
+  el.innerHTML = panelHtml("advice", "Advice", asum, parts.join(""));
+  const lst = document.getElementById("adv-list");
+  if (lst) lst.scrollTop = listTop;
+  if (searching !== null) { const si = document.getElementById("adv-search") as HTMLInputElement | null; si?.focus(); si?.setSelectionRange(searching, searching); }
+  // highlight the clicked line in the editor
+  const ta = document.getElementById("adv-edit") as HTMLTextAreaElement | null;
+  if (ta && A.editor && A.editor.line >= 0 && document.activeElement !== ta) {
+    const lines = ta.value.split("\n");
+    const start = lines.slice(0, A.editor.line).reduce((n, l) => n + l.length + 1, 0);
+    ta.focus(); ta.setSelectionRange(start, start + (lines[A.editor.line]?.length ?? 0));
+  }
+}
+
+function openEditor(line: number): void {
+  const r = A.result;
+  const text = A.sentText || (r ? r.items.map((i) => i.advice).join("\n") : "");
+  // find the clicked advice in the sent text (it may carry list markers or comments)
+  let ln = -1;
+  if (r && line >= 0) ln = text.split("\n").findIndex((l) => l.includes(r.items[line].advice));
+  A.editor = { text, line: ln };
+  renderAdvice();
+  if (ln < 0) (document.getElementById("adv-edit") as HTMLTextAreaElement | null)?.focus();
+}
+
+$("advice").addEventListener("click", async (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest("#adv-choose")) { $<HTMLInputElement>("adv-file").click(); return; }
+  if (t.closest("#adv-read") && A.file && !A.file.error) { startAdvice(A.file.name, A.file.text); return; }
+  if (t.closest("#adv-retry")) { startAdvice(A.result?.file ?? A.file?.name ?? "advice.txt", A.sentText || A.file?.text || ""); return; }
+  const rp = t.closest<HTMLElement>("[data-rephrase]");
+  if (rp) { openEditor(Number(rp.dataset.rephrase)); return; }
+  if (t.closest("#adv-rephrase-all")) { openEditor(-1); return; }
+  if (t.closest("#adv-cancel")) { A.editor = null; renderAdvice(); return; }
+  if (t.closest("#adv-reread")) {
+    const text = (document.getElementById("adv-edit") as HTMLTextAreaElement).value;
+    const name = A.result?.file ?? A.file?.name ?? "advice.txt";
+    const check = parseAdvice(name, text);
+    if (check.error) { A.error = check.error; renderAdvice(); return; }
+    A.editor = { text, line: -1 }; startAdvice(name, text); A.editor = null; return;
+  }
+  if (t.closest("#adv-new")) { A.showUpload = true; renderAdvice(); return; }
+  if (t.closest("#adv-recheck") && A.result) {
+    A.rechecking = true; renderAdvice();
+    try { A.result = await api.adviceRecheck(A.result.key); announce("Checked again."); } catch (err) { A.error = (err as Error).message; }
+    A.rechecking = false; renderAdvice(); return;
+  }
+  const op = t.closest<HTMLElement>("[data-adv-open]");
+  if (op) {
+    try { A.result = await api.adviceSet(op.dataset.advOpen!); A.sentText = ""; A.editor = null; resetAdviceList(); announce(`Opened ${A.result.file}.`); } catch (err) { A.error = (err as Error).message; }
+    renderAdvice();
+  }
+});
+$("advice").addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  const row = t.closest<HTMLElement>("[data-adv-row]");
+  if (row) {
+    const i = Number(row.dataset.advRow);
+    if (AL.open.has(i)) AL.open.delete(i);
+    else { if (!AL.all) AL.open.clear(); AL.open.add(i); }   // one row at a time unless "Expand all"
+    updateAdviceList();
+    (document.querySelector(`[data-adv-row="${i}"]`) as HTMLElement | null)?.focus();
+    return;
+  }
+  const f = t.closest<HTMLElement>("[data-adv-filter]");
+  if (f) { AL.filter = f.dataset.advFilter as AdviceFilter; updateAdviceList(); return; }
+  if (t.closest("#adv-expand") && A.result) { AL.all = true; adviceVisible(A.result).forEach((i) => AL.open.add(i)); updateAdviceList(); return; }
+  if (t.closest("#adv-collapse")) { AL.all = false; AL.open.clear(); updateAdviceList(); }
+});
+$("advice").addEventListener("input", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.id === "adv-search") { AL.q = t.value; updateAdviceList(); }
+});
+$("advice").addEventListener("change", (e) => {
+  const t = e.target as HTMLInputElement;
+  if (t.id === "adv-file" && t.files?.[0]) chooseAdviceFile(t.files[0]);
+  if (t.id === "adv-budget") { const v = Math.round(Number(t.value)); A.budget = v >= 1 && v <= 1000 ? v : 0; renderAdvice(); }
+});
+$("advice").addEventListener("dragover", (e) => { if ((e as DragEvent).dataTransfer?.types.includes("Files")) { e.preventDefault(); document.getElementById("adv-drop")?.classList.add("over"); } });
+$("advice").addEventListener("dragleave", () => document.getElementById("adv-drop")?.classList.remove("over"));
+$("advice").addEventListener("drop", (e) => {
+  const f = (e as DragEvent).dataTransfer?.files?.[0];
+  if (!f) return;
+  e.preventDefault(); document.getElementById("adv-drop")?.classList.remove("over");
+  chooseAdviceFile(f);
 });
 
 async function startFetch(only?: string[]): Promise<void> {
@@ -1229,6 +1599,7 @@ async function poll(): Promise<void> {
     const wasRunning = S.job.running;
     S.job = j;
     if (wasRunning && !j.running) {
+      panels.fetch = true; // a new result opens expanded
       announce(`Fetch finished: ${j.counts.reused + j.counts.done} ready, ${j.counts.failed} failed.`);
       rememberFetched(j);
       loadLayers(); refreshSaved(); loadPlan(); loadPrepRuns();
@@ -1267,8 +1638,11 @@ const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "nume
 
 function renderDockets(): void {
   const rows = (S.job?.sources ?? []).filter((r) => r.result);
-  if (!rows.length) { $("dockets").innerHTML = ""; return; }
-  $("dockets").innerHTML = `<h2 class="dockets-head">Results<span>${rows.length} snapshot${rows.length > 1 ? "s" : ""}</span></h2>` + rows.map((r) => {
+  if (!rows.length) { $("dockets").innerHTML = ""; $("dockets").classList.remove("rpanel"); return; }
+  $("dockets").classList.add("rpanel");
+  const all = S.job?.sources.length ?? rows.length;
+  const ok = (S.job?.sources ?? []).filter((r) => r.status === "done" || r.status === "reused").length;
+  $("dockets").innerHTML = panelHtml("fetch", "Fetch", S.job?.running ? "fetching…" : `${ok} of ${all} source${all === 1 ? "" : "s"} ok`, rows.map((r) => {
     const res = r.result!;
     const files = Object.entries(res.files).map(([f, b]) => `<span class="mono">${esc(f)}</span><span>${size(b ?? 0)}</span>`).join("");
     const no = two(S.specs.findIndex((s) => s.source === r.source));
@@ -1278,7 +1652,7 @@ function renderDockets(): void {
       <div class="files">${files}</div>
       ${r.source === "osm_facilities" && S.facilities.length ? facilityList() : ""}
       <div class="row-actions"><button class="btn btn-sm" type="button" data-manifest="${r.source}">View manifest</button><button class="btn btn-sm btn-quiet" type="button" data-copy="${esc(res.path)}"><span class="ic">${icon("copy")}</span>Copy path</button></div></article>`;
-  }).join("");
+  }).join(""));
 }
 $("dockets").addEventListener("toggle", (e) => {
   if ((e.target as HTMLElement).classList.contains("fac-list")) S.facListOpen = (e.target as HTMLDetailsElement).open;
@@ -1502,6 +1876,7 @@ function keepFocus(render: () => void): void {
 
 function renderAll(): void {
   renderPrep();
+  renderAdvice();
   renderMode();
   renderSnap();
   renderReadout();

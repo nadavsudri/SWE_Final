@@ -1,0 +1,7 @@
+# Example advice for testing the pipeline. One advice per line; lines starting with # are ignored.
+Every district should receive at least one new facility.
+Give priority to districts where less than 30% of the people are within reach of a facility.
+No single district should receive more than a third of the new facilities.
+Districts that have no existing facility should be served before others.
+More populated districts should get more facilities than small ones.
+Prefer locations close to the main roads.
