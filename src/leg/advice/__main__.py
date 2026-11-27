@@ -1,10 +1,10 @@
 """CLI for the advice file and its scoring functions.
 
   python -m leg.advice prepare advice.txt --prep data/processed/<area>/<run> [--budget 10] [--model ...]
-      the LLM writes one scoring function per advice; checks run; a review is saved
+      the LLM writes one scoring function per advice; checks run; the ones that pass are used at once
   python -m leg.advice recheck advice.txt     run the checks again on the saved code (no LLM call)
   python -m leg.advice show advice.txt        print the review (interpretation, checks, code)
-  python -m leg.advice approve advice.txt     approve after reading; only approved functions are used
+  python -m leg.advice approve advice.txt     optional: record that a person read the review and agrees
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             u = rec["llm_usage"]
             print(f"Saved in {d}  ({u.get('model')}: {u.get('input_tokens')} in / {u.get('output_tokens')} out tokens)")
             _summary(rec)
-            print(f"\nRead {d / adv.REVIEW}, then: python -m leg.advice approve {a.advice_file}")
+            print(f"\nIn use now. How each advice is measured: {d / adv.REVIEW}")
         elif a.cmd == "recheck":
             rec = adv.recheck(a.advice_file, a.root)
             print(f"Checked again ({len(rec['items'])} advice):")
@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
             print(adv.review_text(rec))
         else:
             rec = adv.approve(a.advice_file, a.root)
-            print(f"Approved at {rec['approved_at']}. Runs with {a.advice_file} will use these functions.")
+            print(f"Recorded: reviewed by a person at {rec['approved_at']}.")
     except (FileNotFoundError, ValueError, PermissionError, RuntimeError) as e:
         print(f"ERROR: {e}")
         return 1
@@ -62,7 +62,7 @@ def _summary(rec: dict) -> None:
         elif it["check"]["passed"]:
             state = "checks passed" + (f"; warning: {it['check']['warnings'][0]}" if it["check"]["warnings"] else "")
         else:
-            state = "CHECKS FAILED: " + "; ".join(it["check"]["errors"])
+            state = "CHECKS FAILED, not scored: " + "; ".join(it["check"]["errors"])
         print(f"  {i}. {it['advice'][:70]}  ->  {state}")
 
 

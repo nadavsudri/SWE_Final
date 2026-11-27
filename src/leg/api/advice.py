@@ -4,8 +4,11 @@ POST /api/advice                    {filename, text, area_id, run_id, budget?} -
 GET  /api/advice/jobs/{job_id}      status, stage, elapsed; the result when done
 GET  /api/advice                    saved advice sets, newest first
 GET  /api/advice/{key}              one set: per advice its interpretation, checks, sample scores, code
-POST /api/advice/{key}/approve      approve (refused while any check failed)
+POST /api/advice/{key}/approve      optional: record that a person read it and agrees
 POST /api/advice/{key}/recheck      run the checks again on the saved code (no LLM call)
+
+Functions that pass the checks are used at once (approved_by "auto"); an advice that fails is
+not scored (used: false) and the planner still reads it.
 
 The browser reads the .txt/.json file and sends its text: no multipart upload needed.
 """
@@ -69,10 +72,11 @@ def set_view(d: Path) -> dict:
     rec = adv.load_dir(d)
     u = rec.get("llm_usage", {})
     return {"key": d.name, "file": Path(rec["advice_file"]).name, "created_at": rec["created_at"],
-            "approved_at": rec["approved_at"], "prep_run": rec["prep_run"], "sample_plans": rec["sample_plans"],
+            "approved_at": rec["approved_at"], "approved_by": rec.get("approved_by"),
+            "prep_run": rec["prep_run"], "sample_plans": rec["sample_plans"],
             "model": u.get("model"), "tokens": {"input": u.get("input_tokens"), "output": u.get("output_tokens")},
-            "can_approve": not any(it["measurable"] and not it["check"]["passed"] for it in rec["items"]),
-            "items": [{"advice": it["advice"], "measurable": it["measurable"], "interpretation": it["interpretation"],
+            "items": [{"advice": it["advice"], "measurable": it["measurable"], "used": adv.used(it),
+                       "interpretation": it["interpretation"],
                        "passed": it["check"]["passed"] if it["check"] else None,
                        "errors": it["check"]["errors"] if it["check"] else [],
                        "warnings": it["check"]["warnings"] if it["check"] else [],

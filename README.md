@@ -141,26 +141,25 @@ is an error that says where to put it. Preprocessing merges these facilities wit
 
 The advice is a file given at the start of a run: one advice per line, free text, any language
 (`#` lines are comments), or a JSON list of strings. As in the paper, an LLM reads it and writes one
-scoring function per advice, `score(plan) -> 0..1`. This happens **once per advice file**, and a person
-approves the functions before any run uses them:
+scoring function per advice, `score(plan) -> 0..1`, **once per advice file**; fully automatic:
 ```bash
 python -m leg.advice prepare advice.txt --prep data/processed/<area>/<run>   # needs ANTHROPIC_API_KEY in .env
-python -m leg.advice show advice.txt        # interpretation, check results, sample scores, code
-python -m leg.advice approve advice.txt     # only approved functions are used
+python -m leg.advice show advice.txt        # how each advice is measured: interpretation, checks, examples, code
+python -m leg.advice recheck advice.txt     # run the checks again on the saved code (no LLM call)
+python -m leg.advice approve advice.txt     # optional: record that a person read it and agrees
 ```
 - Each function gets a plan record per district: population, coverage before/after (people within a
   two-hour walk), existing and new facilities, cells, `fully_inside` (see `advice/plan.py`).
-- Advice that needs data the plan doesn't have (roads, terrain...) is marked *not measurable*: the
-  planner still reads it, it is not scored.
-- Checks before approval: the code passes an allow-list sandbox (plain Python + `math`, no imports,
-  files, network or while loops), then runs in a separate process with a 10 s limit on five real
-  sample plans of the area: it must return a number in 0-1, the same number twice, and (warning) not
-  the same number for every plan.
-- In the UI (after preprocessing): upload the .txt, follow the progress, read each interpretation and
-  approve. API: `POST /api/advice`, `GET /api/advice/jobs/{id}`, `GET /api/advice[/{key}]`,
-  `POST /api/advice/{key}/approve|recheck` (see `src/leg/api/advice.py`).
-- Saved in `data/advice/<file>_<hash>/` (`scoring.json` + `review.md`). Editing the advice file changes
-  the hash: new functions, new approval. Alignment of a plan = mean over the measurable advice.
+- Checks: the code passes an allow-list sandbox (plain Python + `math`, no imports, files, network or
+  while loops), then runs in a separate process with a 10 s limit on five real sample plans of the
+  area: a number in 0-1, the same number twice, and (warning) not the same number for every plan.
+- Functions that pass are used at once. An advice that fails a check, or needs data the plan
+  doesn't have (roads, terrain...), is not scored; the planner still reads it. Alignment of a plan =
+  mean over the scored advice.
+- In the UI (after preprocessing): upload the .txt, follow the progress, see how each advice will be
+  measured, rephrase if needed. API: `POST /api/advice`, `GET /api/advice/jobs/{id}`,
+  `GET /api/advice[/{key}]`, `POST /api/advice/{key}/approve|recheck` (`src/leg/api/advice.py`).
+- Saved in `data/advice/<file>_<hash>/` (`scoring.json` + `review.md`); editing the file = new functions.
 
 ## Placement algorithms (`src/leg/algo`)
 

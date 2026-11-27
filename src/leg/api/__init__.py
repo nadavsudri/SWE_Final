@@ -380,10 +380,7 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None,
     def advice_approve(key: str):
         from leg import advice as adv
         d = _advice_dir(key)
-        try:
-            adv.approve_dir(d)
-        except ValueError as e:
-            raise HTTPException(400, {"errors": [str(e)]})
+        adv.approve_dir(d)
         return set_view(d)
 
     @app.post("/api/advice/{key}/recheck")

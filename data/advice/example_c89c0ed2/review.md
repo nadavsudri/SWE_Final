@@ -1,7 +1,7 @@
 # Advice scoring review: example.txt
 
 Written by claude-sonnet-5-5 on 2026-11-27T17:07:49+00:00. Sample plans use budget 10 on data/processed/eth_negev_6dfcdf57/2026-11-25T132613Z.
-Status: NOT APPROVED
+Status: in use (used automatically, 2026-11-27T17:30:50+00:00).
 
 ## 1. Every district should receive at least one new facility.
 

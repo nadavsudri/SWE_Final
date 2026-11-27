@@ -109,23 +109,23 @@ def test_prepare_checks_and_saves(run, tmp_path):
     assert "unsafe" in it[2]["check"]["errors"][0]
     assert "outside 0-1" in it[3]["check"]["errors"][0]
     assert it[4]["check"]["passed"] and "same score" in it[4]["check"]["warnings"][0]
-    assert rec["approved_at"] is None and rec["llm_usage"]["model"] == "fake"
+    # in use at once; the two that failed are not scored
+    assert rec["approved_by"] == "auto" and rec["approved_at"] and rec["llm_usage"]["model"] == "fake"
+    assert [x["used"] for x in it] == [True, False, False, False, True]
     review = (d / adv.REVIEW).read_text()
-    assert "NOT APPROVED" in review and "Not measurable" in review and "def score" in review
-    with pytest.raises(PermissionError, match="not approved"):
-        adv.load(f, tmp_path / "adv")
-    with pytest.raises(ValueError, match=r"advice \[3, 4\] failed"):
-        adv.approve(f, tmp_path / "adv")
+    assert "used automatically" in review and "Advice [3, 4] failed" in review and "Not measurable" in review
+    loaded = adv.load(f, tmp_path / "adv")                   # usable without a person approving
+    assert adv.alignment(loaded, PlanBuilder.from_run(run, max_minutes=30).plan([], 2))["scores"] == [0.0, None, None, None, 0.5]
+    assert adv.approve(f, tmp_path / "adv")["approved_by"] == "person"   # optional record
 
 
-def test_approve_then_alignment(run, tmp_path):
+def test_alignment(run, tmp_path):
     f = tmp_path / "advice.txt"
     f.write_text("one new facility per district\nlow coverage first\nnear the main road\n")
     adv.prepare(f, run, budget=2, llm=fake_llm([GOOD, LOW_COVERAGE_FIRST, None], [True, True, False]),
                 root=tmp_path / "adv")
-    adv.approve(f, tmp_path / "adv")
     rec = adv.load(f, tmp_path / "adv")
-    assert rec["approved_at"]
+    assert rec["approved_by"] == "auto"
     pb = PlanBuilder.from_run(run, max_minutes=30)
     cells = {}
     for i in range(pb.inst.n_cells):
@@ -161,8 +161,8 @@ def test_cli(run, tmp_path, monkeypatch, capsys):
     root = str(tmp_path / "adv")
     assert main(["prepare", str(f), "--prep", str(run), "--budget", "2", "--root", root]) == 0
     assert "checks passed" in capsys.readouterr().out
-    assert main(["show", str(f), "--root", root]) == 0 and "NOT APPROVED" in capsys.readouterr().out
-    assert main(["approve", str(f), "--root", root]) == 0 and "Approved" in capsys.readouterr().out
+    assert main(["show", str(f), "--root", root]) == 0 and "used automatically" in capsys.readouterr().out
+    assert main(["approve", str(f), "--root", root]) == 0 and "reviewed by a person" in capsys.readouterr().out
     monkeypatch.setattr(adv, "claude_llm", lambda model=None: (_ for _ in ()).throw(RuntimeError("needs the Claude API key")))
     assert main(["prepare", str(f), "--prep", str(run), "--root", root]) == 1
 

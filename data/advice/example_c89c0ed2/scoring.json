@@ -9,7 +9,7 @@
     "input_tokens": 1856,
     "output_tokens": 3669
   },
-  "approved_at": null,
+  "approved_at": "2026-11-27T17:30:50+00:00",
   "sample_plans": [
     "by uncovered population",
     "all in the most populated district",
@@ -34,7 +34,8 @@
           "spread one by one, most populated first": 1.0,
           "by population": 0.9
         }
-      }
+      },
+      "used": true
     },
     {
       "advice": "Give priority to districts where less than 30% of the people are within reach of a facility.",
@@ -52,7 +53,8 @@
           "spread one by one, most populated first": 1.0,
           "by population": 0.9
         }
-      }
+      },
+      "used": true
     },
     {
       "advice": "No single district should receive more than a third of the new facilities.",
@@ -70,7 +72,8 @@
           "spread one by one, most populated first": 1.0,
           "by population": 1.0
         }
-      }
+      },
+      "used": true
     },
     {
       "advice": "Districts that have no existing facility should be served before others.",
@@ -88,7 +91,8 @@
           "spread one by one, most populated first": 1.0,
           "by population": 0.8889
         }
-      }
+      },
+      "used": true
     },
     {
       "advice": "More populated districts should get more facilities than small ones.",
@@ -106,14 +110,17 @@
           "spread one by one, most populated first": 0.5,
           "by population": 0.6889
         }
-      }
+      },
+      "used": true
     },
     {
       "advice": "Prefer locations close to the main roads.",
       "measurable": false,
       "interpretation": "The plan has no road data and no facility coordinates, only district-level figures, so closeness to main roads cannot be scored.",
       "code": null,
-      "check": null
+      "check": null,
+      "used": false
     }
-  ]
+  ],
+  "approved_by": "auto"
 }

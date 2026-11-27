@@ -572,23 +572,22 @@ def test_advice_upload_score_and_approve(root, tmp_path):
     v = _wait_advice(c, job)
     assert v["status"] == "done" and v["stage"] == "saving" and v["error"] is None
     r = v["result"]
-    assert r["file"] == "my-advice.txt" and r["model"] == "fake" and r["approved_at"] is None and r["can_approve"]
-    assert [i["measurable"] for i in r["items"]] == [True, False]
-    assert r["items"][0]["passed"] and len(r["items"][0]["sample_scores"]) == 5 and "NOT APPROVED" in r["review_md"]
-    assert [s["key"] for s in c.get("/api/advice").json()["sets"]] == [r["key"]]
-    ok = c.post(f"/api/advice/{r['key']}/approve").json()
-    assert ok["approved_at"]
-    again = c.post(f"/api/advice/{r['key']}/recheck").json()   # rechecking clears the approval
-    assert again["approved_at"] is None and again["items"][0]["passed"]
+    assert r["file"] == "my-advice.txt" and r["model"] == "fake" and r["approved_by"] == "auto"
+    assert [(i["measurable"], i["used"]) for i in r["items"]] == [(True, True), (False, False)]
+    assert r["items"][0]["passed"] and len(r["items"][0]["sample_scores"]) == 5 and "used automatically" in r["review_md"]
+    sets = c.get("/api/advice").json()["sets"]
+    assert [(x["key"], x["used"], x["not_measurable"]) for x in sets] == [(r["key"], 1, 1)]
+    assert c.post(f"/api/advice/{r['key']}/approve").json()["approved_by"] == "person"   # optional
+    again = c.post(f"/api/advice/{r['key']}/recheck").json()
+    assert again["approved_by"] == "auto" and again["items"][0]["passed"]
 
 
-def test_advice_failed_check_cannot_be_approved(root, tmp_path):
+def test_advice_failed_check_is_not_scored(root, tmp_path):
     c, run = _advice_client(root, tmp_path, ["def score(plan):\n    return 3.0\n"])
     job = c.post("/api/advice", json={"filename": "a.txt", "text": "x\n", "area_id": "ETH_t", "run_id": run.name}).json()["job_id"]
     r = _wait_advice(c, job)["result"]
-    assert not r["can_approve"] and "outside 0-1" in r["items"][0]["errors"][0]
-    resp = c.post(f"/api/advice/{r['key']}/approve")
-    assert resp.status_code == 400 and "failed the checks" in resp.json()["detail"]["errors"][0]
+    assert not r["items"][0]["used"] and "outside 0-1" in r["items"][0]["errors"][0]
+    assert r["approved_by"] == "auto" and "not scored" in r["review_md"]
 
 
 def test_advice_upload_errors(root, tmp_path):

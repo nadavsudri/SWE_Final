@@ -8,7 +8,9 @@ plan follows each one. To keep experiments sound, this happens once per advice f
      process: it must return a number in [0, 1], the same number twice, and (warning only) not the
      same number for every sample plan.
   2. The functions and a readable review are saved under data/advice/<file>_<hash>/.
-  3. A person reads the review and approves it (approve()); only approved functions are used.
+  3. Fully automatic, as in the paper: functions that pass the checks are used at once
+     (approved_by "auto"). An advice whose function fails a check is excluded from the score and
+     marked as such; the planner still reads it. A person can read the review and rephrase.
   4. alignment(): every run with that advice file uses exactly these functions.
 
 Advice file: UTF-8 text, one advice per line (blank lines and lines starting with # are skipped,
@@ -240,11 +242,24 @@ def prepare(advice_file: Path | str, prep_dir: Path | str, budget: int = 10, llm
     record = {"advice_file": str(advice_file), "advice_sha256": advice_hash(items),
               "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
               "prep_run": str(prep_dir), "budget_for_samples": budget, "llm_usage": usage,
-              "approved_at": None, "sample_plans": list(plans), "items": out}
+              "approved_at": None, "approved_by": None, "sample_plans": list(plans), "items": out}
+    _auto_approve(record)
     report("saving", 0, 1)
     save_dir(d, record)
     report("saving", 1, 1)
     return d
+
+
+def used(it: dict) -> bool:
+    """An advice counts in the score only if it is measurable and its function passed every check."""
+    return bool(it["measurable"] and it.get("check") and it["check"]["passed"])
+
+
+def _auto_approve(rec: dict) -> None:
+    for it in rec["items"]:
+        it["used"] = used(it)
+    rec["approved_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rec["approved_by"] = "auto"
 
 
 def save_dir(d: Path, rec: dict) -> None:
@@ -261,11 +276,10 @@ def load_dir(d: Path | str) -> dict:
 
 
 def approve_dir(d: Path | str) -> dict:
+    """Optional: record that a person read the review and agrees (the functions are already in use)."""
     rec = load_dir(d)
-    failed = [i + 1 for i, it in enumerate(rec["items"]) if it["measurable"] and not it["check"]["passed"]]
-    if failed:
-        raise ValueError(f"advice {failed} failed the checks: fix the code in {SCORING} or prepare again")
     rec["approved_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rec["approved_by"] = "person"
     save_dir(Path(d), rec)
     return rec
 
@@ -277,7 +291,8 @@ def recheck_dir(d: Path | str, max_minutes: float = 120.0) -> dict:
     plans = sample_plans(builder, rec["budget_for_samples"])
     for it in rec["items"]:
         it["check"] = check_function(it["code"], plans) if it["measurable"] else None
-    rec["sample_plans"], rec["approved_at"] = list(plans), None
+    rec["sample_plans"] = list(plans)
+    _auto_approve(rec)
     save_dir(Path(d), rec)
     return rec
 
@@ -288,9 +303,10 @@ def list_sets(root: Path | str = "data/advice") -> list[dict]:
     for p in Path(root).glob(f"*/{SCORING}"):
         rec = json.loads(p.read_text(encoding="utf-8"))
         out.append({"key": p.parent.name, "file": Path(rec["advice_file"]).name, "created_at": rec["created_at"],
-                    "approved_at": rec["approved_at"], "advice": len(rec["items"]),
-                    "measurable": sum(1 for it in rec["items"] if it["measurable"]),
-                    "failed": sum(1 for it in rec["items"] if it["measurable"] and not it["check"]["passed"])})
+                    "approved_by": rec.get("approved_by"), "advice": len(rec["items"]),
+                    "used": sum(1 for it in rec["items"] if used(it)),
+                    "not_measurable": sum(1 for it in rec["items"] if not it["measurable"]),
+                    "failed": sum(1 for it in rec["items"] if it["measurable"] and not used(it))})
     return sorted(out, key=lambda r: r["created_at"], reverse=True)
 
 
@@ -300,18 +316,27 @@ def recheck(advice_file: Path | str, root: Path | str = "data/advice", max_minut
     return recheck_dir(store_dir(advice_file, read_advice(advice_file), root), max_minutes)
 
 
+def _status(rec: dict) -> str:
+    failed = [i + 1 for i, it in enumerate(rec["items"]) if it["measurable"] and not used(it)]
+    who = "checked and agreed by a person" if rec.get("approved_by") == "person" else "used automatically"
+    s = f"Status: in use ({who}, {rec.get('approved_at')})."
+    if failed:
+        s += f" Advice {failed} failed the checks and are not scored; rephrase them to include them."
+    return s
+
+
 def review_text(rec: dict) -> str:
     lines = [f"# Advice scoring review: {Path(rec['advice_file']).name}", "",
              f"Written by {rec['llm_usage'].get('model', '?')} on {rec['created_at']}. "
              f"Sample plans use budget {rec['budget_for_samples']} on {rec['prep_run']}.",
-             f"Status: {'APPROVED ' + rec['approved_at'] if rec['approved_at'] else 'NOT APPROVED'}", ""]
+             _status(rec), ""]
     for i, it in enumerate(rec["items"], 1):
         lines += [f"## {i}. {it['advice']}", "", f"Interpretation: {it['interpretation'] or '-'}", ""]
         if not it["measurable"]:
             lines += ["Not measurable with the plan data: the planner reads it, it is not scored.", ""]
             continue
         c = it["check"]
-        lines += ["Checks: " + ("passed" if c["passed"] else "FAILED: " + "; ".join(c["errors"]))]
+        lines += ["Checks: " + ("passed" if c["passed"] else "FAILED (not scored): " + "; ".join(c["errors"]))]
         lines += [f"Warning: {w}" for w in c["warnings"]]
         lines += ["", "| Sample plan | Score |", "|---|---|"]
         lines += [f"| {k} | {v:.3f} |" for k, v in c["sample_scores"].items()]
@@ -326,8 +351,8 @@ def load(advice_file: Path | str, root: Path | str = "data/advice", require_appr
         raise FileNotFoundError(f"No scoring functions for {advice_file}: run `python -m leg.advice prepare` first")
     rec = json.loads(p.read_text(encoding="utf-8"))
     if require_approved and not rec.get("approved_at"):
-        raise PermissionError(f"The scoring functions for {advice_file} are not approved yet: read {p.parent / REVIEW}, "
-                              f"then run `python -m leg.advice approve {advice_file}`")
+        raise PermissionError(f"The scoring functions for {advice_file} were saved by an older version: "
+                              f"run `python -m leg.advice recheck {advice_file}`")
     return rec
 
 
@@ -338,10 +363,10 @@ def approve(advice_file: Path | str, root: Path | str = "data/advice") -> dict:
 
 # ------------------------------------------------------------------ scoring a plan
 def alignment(rec: dict, plan: dict) -> dict:
-    """Per-advice scores and their mean over the measurable advice (None if none is measurable)."""
+    """Per-advice scores (None = not scored: not measurable or failed its checks) and their mean."""
     scores = []
     for it in rec["items"]:
-        if not it["measurable"]:
+        if not used(it):
             scores.append(None)
             continue
         v = run_score(it["code"], plan)
