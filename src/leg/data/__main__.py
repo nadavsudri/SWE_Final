@@ -67,8 +67,9 @@ def main(argv: list[str] | None = None) -> int:
     ids = lambda t: [x.strip() for x in t.split(",") if x.strip()]
     if a.level:
         provider = "geoboundaries" if a.level.upper().startswith("ADM") else "osm"
-        bopts, extra = {"provider": provider, "levels": (a.level.upper() if provider == "geoboundaries"
-                                                         else a.level,)}, {"level_choice": "set by user"}
+        level = a.level.upper() if provider == "geoboundaries" else a.level
+        bopts = {"provider": provider, "levels": (level,)}
+        extra = {"level_choice": "set by user", "level_override": {"provider": provider, "level": level}}
         print(f"District level: {provider} {a.level} (set by user)")
     else:
         choice = choose_level(area, cache, a.mode, a.min_share, refresh=a.refresh)

@@ -62,6 +62,8 @@ export class AreaMap {
   onReplaced: (previous: Geo) => void = () => {};
   onDistrictClick: (unitId: string) => void = () => {};
   private snapMarkers: maplibregl.Marker[] = [];
+  // each label's district extent: a label shows only when its district is drawn big enough to hold it
+  private labelBox = new WeakMap<maplibregl.Marker, [number, number, number, number]>();
   /** Pixels the top-right legend covers; fits keep the area clear of it. */
   legendBottom: () => number = () => 150;
 
@@ -168,11 +170,13 @@ export class AreaMap {
     });
     this.draw.start();
     this.draw.setMode("static");
-    this.draw.on("finish", (id) => {
-      const snap = this.draw.getSnapshot();
-      const f = snap.find((x) => x.id === id) ?? snap[snap.length - 1];
-      if (!f) return;
-      const others = snap.filter((x) => x.id !== f.id).map((x) => x.id!);
+    this.draw.on("finish", (id, ctx) => {
+      const f = this.draw.getSnapshot().find((x) => x.id === id);
+      if (!f || f.geometry.type !== "Polygon") return;
+      // a new shape replaces the old one; an edit (select mode) only updates it. The store also holds
+      // terra-draw's own vertex handles and midpoints while editing: those must never be removed.
+      const created = ctx?.mode === "rectangle" || ctx?.mode === "polygon";
+      const others = created ? this.areaFeatures().filter((x) => x.id !== f.id).map((x) => x.id!) : [];
       const previous = others.length ? this.geom : null;
       if (others.length) this.draw.removeFeatures(others);
       this.commit(f.geometry as Geo);
@@ -180,6 +184,31 @@ export class AreaMap {
       if (this.tool !== "edit") this.setTool("edit");
     });
 
+    // A vertex dragged past the map's edge and released outside it never sees pointerup, so terra-draw
+    // would keep dragging it on the next mouse move. End such a drag at the nearest point on the map.
+    window.addEventListener("pointerup", (e) => {
+      if (this.tool !== "edit" && this.tool !== "rect" && this.tool !== "poly") return;
+      const c = this.map.getCanvas(); // terra-draw only listens on the canvas itself
+      if (e.target === c) return;
+      const r = c.getBoundingClientRect();
+      const x = Math.min(r.right - 1, Math.max(r.left + 1, e.clientX)), y = Math.min(r.bottom - 1, Math.max(r.top + 1, e.clientY));
+      c.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, clientX: x, clientY: y, pointerId: e.pointerId,
+        pointerType: e.pointerType, isPrimary: true, button: 0, buttons: 0 }));
+    });
+    // Editing (select mode): terra-draw reports vertex drags only as "change" events, never "finish".
+    // Keep the dashed outline on the shape while it moves, and commit it once the drag has stopped.
+    let editTimer = 0;
+    this.draw.on("change", (ids, type, ctx) => {
+      if (type !== "update" || this.tool !== "edit" || (ctx as { target?: string } | undefined)?.target !== "geometry") return;
+      const f = this.areaFeatures().find((x) => ids.includes(x.id!));
+      if (!f) return;
+      (this.map.getSource("area") as GeoJSONSource).setData({ type: "Feature", properties: {}, geometry: f.geometry });
+      clearTimeout(editTimer);
+      editTimer = window.setTimeout(() => {
+        const now = this.areaFeatures().find((x) => x.id === f.id);
+        if (now) this.commit(now.geometry as Geo);
+      }, 350);
+    });
     this.map.on("click", "fac-pt", (e) => {
       this.popup((e.features?.[0]?.properties ?? {}) as Record<string, unknown>, [e.lngLat.lng, e.lngLat.lat]);
     });
@@ -195,6 +224,8 @@ export class AreaMap {
     this.map.on("mouseenter", "fac-pt", () => (this.map.getCanvas().style.cursor = "pointer"));
     this.map.on("mouseleave", "fac-pt", () => (this.map.getCanvas().style.cursor = ""));
     this.map.on("render", () => this.updateClusters());
+    this.map.on("zoomend", () => this.placeLabels());
+    this.map.on("moveend", () => this.placeLabels());
     this.map.on("error", (e) => {
       const id = (e as unknown as { sourceId?: string }).sourceId ?? "";
       if (this.street.on && id.startsWith("st-")) this.onStreetError("Street map tiles aren't loading: no network connection?");
@@ -245,6 +276,11 @@ export class AreaMap {
 
   get area(): Geo | null { return this.geom; }
 
+  /** The drawn area in terra-draw's store (rectangle or polygon), without its editing handles. */
+  private areaFeatures() {
+    return this.draw.getSnapshot().filter((x) => x.geometry.type === "Polygon" && ["polygon", "rectangle"].includes(String(x.properties?.mode)));
+  }
+
   clearArea(): void {
     this.draw?.clear();
     this.commit(null);
@@ -259,7 +295,7 @@ export class AreaMap {
     if (!this.draw) return;
     this.draw.setMode(t === "rect" ? "rectangle" : t === "poly" ? "polygon" : t === "edit" ? "select" : "static");
     if (t === "edit") {
-      const f = this.draw.getSnapshot()[0];
+      const f = this.areaFeatures()[0];
       if (f) this.draw.selectFeature(f.id!);
     }
     this.onToolChange(t);
@@ -477,7 +513,9 @@ export class AreaMap {
       const full = f.properties!.fully_inside === true;
       el.textContent = String(f.properties!.name) + (free ? (full ? " · advice applies" : " · partial: advice not applied") : "");
       if (free && !full) el.classList.add("partial");
-      return new maplibregl.Marker({ element: el }).setLngLat(labelPoint(f.geometry));
+      const m = new maplibregl.Marker({ element: el }).setLngLat(labelPoint(f.geometry));
+      this.labelBox.set(m, bboxOf(f.geometry));
+      return m;
     });
     this.applyVisibility();
   }
@@ -495,7 +533,9 @@ export class AreaMap {
       const el = document.createElement("div");
       el.className = `district-label snap ${d.included ? "in" : "out"}`;
       el.textContent = `${d.name ?? d.unit_id} · ${Math.round(d.share_inside_area * 100)}% · ${d.included ? "included" : "not included"}`;
-      return new maplibregl.Marker({ element: el }).setLngLat(labelPoint(d.geometry));
+      const m = new maplibregl.Marker({ element: el }).setLngLat(labelPoint(d.geometry));
+      this.labelBox.set(m, bboxOf(d.geometry));
+      return m;
     });
     this.applyVisibility();
   }
@@ -514,6 +554,23 @@ export class AreaMap {
     this.applyVisibility();
   }
 
+  /** Labels only where they fit: a district must be drawn at least LABEL_MIN px on screen, so zoomed
+   *  out the map stays readable and labels appear as you zoom in (the side list has every name). */
+  private static readonly LABEL_MIN: [number, number] = [110, 36];
+  private placeLabels(): void {
+    if (this.failed) return;
+    const [minW, minH] = AreaMap.LABEL_MIN;
+    const fits = (m: maplibregl.Marker) => {
+      const b = this.labelBox.get(m);
+      if (!b) return true;
+      const p1 = this.map.project([b[0], b[1]]), p2 = this.map.project([b[2], b[3]]);
+      return Math.abs(p2.x - p1.x) >= minW && Math.abs(p2.y - p1.y) >= minH;
+    };
+    const place = (ms: maplibregl.Marker[], on: boolean) => ms.forEach((m) => (on && fits(m) ? m.addTo(this.map) : m.remove()));
+    place(this.snapMarkers, this.visible.snap);
+    place(this.districtMarkers, this.visible.districts);
+  }
+
   private applyVisibility(): void {
     if (this.failed) return;
     const v = (on: boolean) => (on ? "visible" : "none");
@@ -521,9 +578,9 @@ export class AreaMap {
     for (const id of ["districts-fill", "districts-line"]) this.map.setLayoutProperty(id, "visibility", v(this.visible.districts));
     for (const id of ["districts-full-fill", "districts-partial-line"]) this.map.setLayoutProperty(id, "visibility", v(this.visible.districts && this.freeDistricts));
     for (const id of ["snap-in-fill", "snap-out-fill", "snap-in-line", "snap-out-line", "snapped-line"]) this.map.setLayoutProperty(id, "visibility", v(this.visible.snap));
-    this.snapMarkers.forEach((m) => (this.visible.snap ? m.addTo(this.map) : m.remove()));
+    this.placeLabels();
     this.map.setLayoutProperty("fac-pt", "visibility", v(this.visible.facilities));
-    this.districtMarkers.forEach((m) => (this.visible.districts ? m.addTo(this.map) : m.remove()));
+
     if (!this.visible.facilities) { this.clusterMarkers.forEach((m) => m.remove()); this.clusterMarkers.clear(); }
   }
 

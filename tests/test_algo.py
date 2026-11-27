@@ -141,29 +141,35 @@ def test_random_is_seeded(toy):
 
 # ---------------------------------------------------------------- end to end from preprocessing output
 def test_load_prep_output_and_cli(tmp_path, capsys):
-    import csv
     import json
     from leg.algo.__main__ import main
+    from leg.prep import PAIR_COLS
     d = tmp_path / "prep"
     d.mkdir()
-    with open(d / "cells.csv", "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["cell_id", "lon", "lat", "population", "district_id", "is_candidate", "already_covered"])
-        for i, (p, dist, done) in enumerate([(4, 0, 0), (6, 0, 0), (10, 1, 0), (2, 1, 1), (3, -1, 0)]):
-            w.writerow([i, 0, 0, p, dist, 1, done])
-    (d / "coverage.json").write_text(json.dumps({"0": [0], "1": [1, 4], "2": [2, 3], "3": [3]}))
-    (d / "districts.csv").write_text("district_id,name\n0,North\n1,South\n")
+    # cells 10..14: populations 4, 6, 10, 2, 3; districts North (10, 11) and South (12, 13, 14)
+    rows = [(10, 4, "North"), (11, 6, "North"), (12, 10, "South"), (13, 2, "South"), (14, 3, "South")]
+    (d / "population.csv").write_text("cell,lat,lon,ADM1,ADM2,ADM3,population,year\n" + "".join(
+        f"{c},0,0,R,Z,{n},{p},2026\n" for c, p, n in rows))
+    pair = lambda i, j, m: f"{i},{j},0,0,0,0,R,Z,x,R,Z,y,{m}\n"
+    (d / "pairwise_costs.csv").write_text(",".join(PAIR_COLS) + "\n" + pair(11, 14, 30) + pair(12, 13, 90)
+                                          + pair(10, 12, 121))
+    (d / "existing.csv").write_text("cell,lat,lon,source,name,type,snapped_km\n13,0,0,osm,x,clinic,0\n")
     (d / "meta.json").write_text("{}")
     inst = Instance.load(d)
-    assert inst.weight.tolist() == [4, 6, 10, 0, 3] and inst.district_names == {0: "North", 1: "South"}
-    assert coverage(inst, [1]) == 9            # covers cell 4 (no district) too
+    # cell 13 has a facility; it also covers 12 (90 min) -> both already covered
+    assert inst.weight.tolist() == [4, 6, 0, 0, 3] and inst.district_names == {0: "North", 1: "South"}
+    assert coverage(inst, [1]) == 9            # cell 11 covers itself and 14 (30 min)
+    assert coverage(inst, [0]) == 4            # 121 min is past the 2-hour cutoff
     out = tmp_path / "r.json"
     assert main([str(d), "--b", "2", "--allocation", "0:2", "--alpha", "0", "--beta", "1",
                  "--out", str(out)]) == 0
     res = json.loads(out.read_text())["runs"]
-    assert res["ilp"]["optimal"] and res["ilp"]["value"] == 19 and res["greedy"]["value"] == 19
+    assert res["ilp"]["optimal"] and res["ilp"]["value"] == 13 and res["greedy"]["value"] == 13
     assert res["guided(a=0.0,b=1.0)"]["value"] == 13
     assert "valid" in capsys.readouterr().out
+    # the paper's files directly
+    assert main(["--population", str(d / "population.csv"), "--pairwise", str(d / "pairwise_costs.csv"),
+                 "--b", "1", "--ilp-time", "0"]) == 0
 
 
 def test_ilp_warm_start_never_worse_than_greedy_under_time_pressure():

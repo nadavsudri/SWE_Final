@@ -11,7 +11,8 @@ from leg.data.profile import ALLOWED_TAG_KEYS, _VALUE_RE
 
 LABELS = {"worldpop": "Population", "boundaries": "Districts", "osm_facilities": "Health facilities",
           "public_facilities": "Public facilities (sub-Saharan Africa)",
-          "osm_roads": "Roads", "gtfs": "Transit (GTFS)"}
+          "osm_roads": "Roads", "gtfs": "Transit (GTFS)",
+          "friction": "Walking friction (Malaria Atlas)"}
 
 SCHEMA = {
     "worldpop": {"year": {"type": "int", "min": 2015, "max": 2030, "default": 2026},
@@ -23,6 +24,7 @@ SCHEMA = {
                                     "default": list(OsmRoadsFetcher.DEFAULT_TYPES)}},
     "gtfs": {"max_feeds": {"type": "int", "min": 1, "max": 100, "default": 10}},
     "public_facilities": {},  # no options: a fixed dataset, read from a file downloaded once
+    "friction": {"mode": {"type": "enum", "values": ["walking", "motorized"], "default": "walking"}},
 }
 
 
@@ -99,6 +101,11 @@ def normalize(source: str, opts: dict | None, base: dict | None = None) -> tuple
                 kw["highway_types"] = tuple(types)
         elif source == "public_facilities":
             pass
+        elif source == "friction":
+            if "mode" in opts:
+                if opts["mode"] not in ("walking", "motorized"):
+                    err["mode"] = "Mode must be walking or motorized"
+                kw["mode"] = opts["mode"]
         elif source == "gtfs":
             if "max_feeds" in opts:
                 kw["max_feeds"] = _int(opts["max_feeds"], 1, 100, "Max feeds")

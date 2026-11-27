@@ -24,6 +24,9 @@ from leg.api import levels as levels_api
 from leg.api import modes
 from leg.api import sources as sources_mod
 from leg.api.jobs import Job, JobManager
+from leg.api.advice import AdviceManager, set_view
+from leg.api.prep import PrepJob, PrepManager
+from leg.prep import PrepParams
 from leg.api.settings import Settings
 
 SERVED_FILES = {"districts.geojson", "facilities.geojson", MANIFEST}
@@ -66,6 +69,22 @@ class SnapIn(BaseModel):
     refresh: bool = False
 
 
+class AdviceIn(BaseModel):
+    filename: str
+    text: str
+    area_id: str
+    run_id: str
+    budget: int = 10
+
+
+class PrepIn(BaseModel):
+    area_id: str
+    pinned: dict[str, str] = Field(default_factory=dict)
+    years: list[int] | None = None
+    max_minutes: float = 120.0
+    min_population: float = 10.0
+
+
 class FetchIn(BaseModel):
     area: AreaIn
     area_mode: modes.AreaModeIn = Field(default_factory=lambda: modes.AreaModeIn(mode="free"))
@@ -76,12 +95,14 @@ class FetchIn(BaseModel):
     options: dict[str, dict] = Field(default_factory=dict)
 
 
-def create_app(settings: Settings | None = None, static_dir: Path | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, static_dir: Path | None = None, advice_llm=None) -> FastAPI:
     settings = settings or Settings.from_env()
     cache = SnapshotCache(settings.root)
     borders = areas_mod.CountryBorders(settings.root)
     jobs = JobManager(cache)
     level_jobs = levels_api.LevelManager(cache)
+    prep_jobs = PrepManager(settings.root, settings.processed_root)
+    advice_jobs = AdviceManager(settings.advice_root, settings.processed_root, advice_llm)
     app = FastAPI(title="LEG data fetcher", docs_url="/api/docs", openapi_url="/api/openapi.json")
 
     def key_present() -> bool:
@@ -291,6 +312,88 @@ def create_app(settings: Settings | None = None, static_dir: Path | None = None)
             raise HTTPException(400, {"errors": [f"{source} did not fail."]})
         jobs.retry(job, source)
         return job.view()
+
+    @app.post("/api/prep")
+    def start_prep(p: PrepIn):
+        if not _ID.match(p.area_id) or not (settings.root / p.area_id / "area.json").is_file():
+            raise HTTPException(404, {"errors": ["Unknown area: fetch it first."]})
+        try:
+            params = PrepParams(min_population=p.min_population, max_minutes=p.max_minutes,
+                                keep_minutes=p.max_minutes)
+        except ValueError as e:
+            raise HTTPException(400, {"errors": [str(e)]})
+        if jobs.busy() is not None:
+            raise HTTPException(409, {"errors": ["A fetch is still running; preprocess when it finishes."]})
+        if (busy := prep_jobs.busy()) is not None:
+            raise HTTPException(409, {"errors": ["Preprocessing is already running."], "job_id": busy.id})
+        job = prep_jobs.start(PrepJob(p.area_id, p.pinned, params, p.years))
+        return {"job_id": job.id}
+
+    @app.get("/api/prep/area/{area_id}")
+    def prep_runs(area_id: str):
+        if not _ID.match(area_id):
+            raise HTTPException(404, "Not found")
+        return {"area_id": area_id, "runs": prep_jobs.runs(area_id)}
+
+    @app.get("/api/prep/{job_id}")
+    def prep_status(job_id: str):
+        job = prep_jobs.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, {"errors": ["This run is unknown: the server was restarted. Finished runs are saved."]})
+        return job.view()
+
+    @app.post("/api/advice")
+    def start_advice(a: AdviceIn):
+        if (busy := advice_jobs.busy()) is not None:
+            raise HTTPException(409, {"errors": ["Advice is already being scored."], "job_id": busy.id})
+        try:
+            job = advice_jobs.create(a.filename, a.text, a.area_id, a.run_id, a.budget)
+        except FileNotFoundError as e:
+            raise HTTPException(404, {"errors": [str(e)]})
+        except (ValueError, RuntimeError) as e:
+            raise HTTPException(400, {"errors": [str(e)]})
+        return {"job_id": advice_jobs.start(job).id}
+
+    @app.get("/api/advice")
+    def advice_sets():
+        from leg import advice as adv
+        return {"sets": adv.list_sets(settings.advice_root)}
+
+    @app.get("/api/advice/jobs/{job_id}")
+    def advice_status(job_id: str):
+        job = advice_jobs.jobs.get(job_id)
+        if job is None:
+            raise HTTPException(404, {"errors": ["This job is unknown: the server was restarted. Saved sets are listed at /api/advice."]})
+        return job.view(settings.advice_root)
+
+    def _advice_dir(key: str):
+        try:
+            return advice_jobs.set_dir(key)
+        except FileNotFoundError as e:
+            raise HTTPException(404, {"errors": [str(e)]})
+
+    @app.get("/api/advice/{key}")
+    def advice_set(key: str):
+        return set_view(_advice_dir(key))
+
+    @app.post("/api/advice/{key}/approve")
+    def advice_approve(key: str):
+        from leg import advice as adv
+        d = _advice_dir(key)
+        try:
+            adv.approve_dir(d)
+        except ValueError as e:
+            raise HTTPException(400, {"errors": [str(e)]})
+        return set_view(d)
+
+    @app.post("/api/advice/{key}/recheck")
+    def advice_recheck(key: str):
+        from leg import advice as adv
+        d = _advice_dir(key)
+        if advice_jobs.busy() is not None:
+            raise HTTPException(409, {"errors": ["Advice is being scored; try again when it finishes."]})
+        adv.recheck_dir(d)
+        return set_view(d)
 
     @app.get("/api/snapshot/{area_id}/{source}/{snapshot_id}/{file}")
     def snapshot_file(area_id: str, source: str, snapshot_id: str, file: str):

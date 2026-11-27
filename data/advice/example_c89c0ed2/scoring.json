@@ -1,0 +1,119 @@
+{
+  "advice_file": "advice/example.txt",
+  "advice_sha256": "c89c0ed24af4cae18a907012dac1818c2ccac4d688acbd282cdc21555be0cef2",
+  "created_at": "2026-11-27T17:07:49+00:00",
+  "prep_run": "data/processed/eth_negev_6dfcdf57/2026-11-25T132613Z",
+  "budget_for_samples": 10,
+  "llm_usage": {
+    "model": "claude-sonnet-5-5",
+    "input_tokens": 1856,
+    "output_tokens": 3669
+  },
+  "approved_at": null,
+  "sample_plans": [
+    "by uncovered population",
+    "all in the most populated district",
+    "all in the least covered district",
+    "spread one by one, most populated first",
+    "by population"
+  ],
+  "items": [
+    {
+      "advice": "Every district should receive at least one new facility.",
+      "measurable": true,
+      "interpretation": "Score is the number of districts with at least one new facility, divided by the most that could be reached (the smaller of the budget and the number of districts), capped at 1. A budget smaller than the number of districts is therefore not penalised for the districts it cannot reach.",
+      "code": "def score(plan):\n    ds = plan['districts']\n    n = len(ds)\n    if n == 0:\n        return 0.0\n    k = min(plan['budget'], n)\n    if k <= 0:\n        return 0.0\n    got = 0\n    for d in ds:\n        if d['new_facilities'] >= 1:\n            got += 1\n    return float(min(1.0, got / k))\n",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.9,
+          "all in the most populated district": 0.1,
+          "all in the least covered district": 0.1,
+          "spread one by one, most populated first": 1.0,
+          "by population": 0.9
+        }
+      }
+    },
+    {
+      "advice": "Give priority to districts where less than 30% of the people are within reach of a facility.",
+      "measurable": true,
+      "interpretation": "Priority means the districts with coverage_before_pct below 30 get a new facility first. Score is the number of such districts that receive at least one new facility, divided by the most that could be served (the smaller of the facilities placed and the number of such districts). If there are no such districts, the score is 1.",
+      "code": "def score(plan):\n    ds = plan['districts']\n    low = []\n    for d in ds:\n        if d['coverage_before_pct'] < 30:\n            low.append(d)\n    if len(low) == 0:\n        return 1.0\n    total = 0\n    for d in ds:\n        total += d['new_facilities']\n    if total <= 0:\n        return 0.0\n    served = 0\n    for d in low:\n        if d['new_facilities'] >= 1:\n            served += 1\n    k = min(total, len(low))\n    return float(min(1.0, served / k))\n",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.9,
+          "all in the most populated district": 0.1,
+          "all in the least covered district": 0.1,
+          "spread one by one, most populated first": 1.0,
+          "by population": 0.9
+        }
+      }
+    },
+    {
+      "advice": "No single district should receive more than a third of the new facilities.",
+      "measurable": true,
+      "interpretation": "The cap per district is a third of the facilities placed, but never less than 1, since a small plan cannot split a single facility. Score is the share of facilities that sit within the cap, so a district that exceeds it loses only the excess.",
+      "code": "def score(plan):\n    ds = plan['districts']\n    total = 0\n    for d in ds:\n        total += d['new_facilities']\n    if total <= 0:\n        return 0.0\n    cap = max(1.0, total / 3.0)\n    ok = 0.0\n    for d in ds:\n        ok += min(d['new_facilities'], cap)\n    return float(max(0.0, min(1.0, ok / total)))\n",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 1.0,
+          "all in the most populated district": 0.3333,
+          "all in the least covered district": 0.3333,
+          "spread one by one, most populated first": 1.0,
+          "by population": 1.0
+        }
+      }
+    },
+    {
+      "advice": "Districts that have no existing facility should be served before others.",
+      "measurable": true,
+      "interpretation": "Districts with existing_facilities == 0 should get a new facility before districts that already have one. Score is the number of such districts that receive at least one new facility, divided by the most that could be served (the smaller of the facilities placed and the number of such districts). If every district already has a facility, the score is 1.",
+      "code": "def score(plan):\n    ds = plan['districts']\n    zero = []\n    for d in ds:\n        if d['existing_facilities'] == 0:\n            zero.append(d)\n    if len(zero) == 0:\n        return 1.0\n    total = 0\n    for d in ds:\n        total += d['new_facilities']\n    if total <= 0:\n        return 0.0\n    served = 0\n    for d in zero:\n        if d['new_facilities'] >= 1:\n            served += 1\n    k = min(total, len(zero))\n    return float(min(1.0, served / k))\n",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.8889,
+          "all in the most populated district": 0.1111,
+          "all in the least covered district": 0.1111,
+          "spread one by one, most populated first": 1.0,
+          "by population": 0.8889
+        }
+      }
+    },
+    {
+      "advice": "More populated districts should get more facilities than small ones.",
+      "measurable": true,
+      "interpretation": "Score is the share of district pairs with different populations in which the more populous district gets more new facilities. A tie counts as half, and pairs with equal population are ignored.",
+      "code": "def score(plan):\n    ds = plan['districts']\n    total = 0\n    for d in ds:\n        total += d['new_facilities']\n    if total <= 0:\n        return 0.0\n    n = len(ds)\n    pairs = 0\n    pts = 0.0\n    for i in range(n):\n        for j in range(i + 1, n):\n            a = ds[i]\n            b = ds[j]\n            if a['population'] == b['population']:\n                continue\n            if a['population'] > b['population']:\n                big = a\n                small = b\n            else:\n                big = b\n                small = a\n            pairs += 1\n            if big['new_facilities'] > small['new_facilities']:\n                pts += 1.0\n            elif big['new_facilities'] == small['new_facilities']:\n                pts += 0.5\n    if pairs == 0:\n        return 1.0\n    return float(pts / pairs)\n",
+      "check": {
+        "passed": true,
+        "errors": [],
+        "warnings": [],
+        "sample_scores": {
+          "by uncovered population": 0.6889,
+          "all in the most populated district": 0.6,
+          "all in the least covered district": 0.4444,
+          "spread one by one, most populated first": 0.5,
+          "by population": 0.6889
+        }
+      }
+    },
+    {
+      "advice": "Prefer locations close to the main roads.",
+      "measurable": false,
+      "interpretation": "The plan has no road data and no facility coordinates, only district-level figures, so closeness to main roads cannot be scored.",
+      "code": null,
+      "check": null
+    }
+  ]
+}

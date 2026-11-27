@@ -10,7 +10,9 @@ export interface LevelCount { provider: string; level: string; available: boolea
 export interface LevelChoice { provider: string; level: string; usable: number; in_range: boolean; reason: string; counts: LevelCount[]; rule: Record<string, unknown> }
 export interface LevelJob {
   job_id: string; status: "running" | "done" | "failed"; probing: Level | null;
-  probed: (Level & { state: "cached" | "downloaded" | "missing" | "no unit" | "failed" })[];
+  in_progress?: (Level & { elapsed_s: number })[];   // every level being checked right now
+  probed: (Level & { state: "cached" | "downloaded" | "missing" | "no unit" | "failed" | "skipped";
+    touched: number; usable: number; note: string; seconds: number | null })[];
   choice: LevelChoice | null; error: string | null; area_id: string; mode: string; min_share: number;
 }
 export interface SnapDistrict {
@@ -67,6 +69,17 @@ export interface Job {
   counts: Record<string, number>; sources: JobRow[];
 }
 
+export interface PrepOutput {
+  run_id: string; path: string; planning_year: number | null; seconds?: number; params?: Record<string, unknown>;
+  totals: { cells: number; pairs: number; districts: number; population: number; covered_population: number; existing_facilities: number };
+  unassigned: { cells: number; population: number }; dropped_facilities: number; files: Record<string, number>;
+}
+export interface PrepJob {
+  job_id: string; area_id: string; status: "queued" | "running" | "done" | "failed"; running: boolean;
+  stage: string | null; stage_label: string; stage_index: number; stages: number; percent: number;
+  elapsed_s: number; eta_s: number | null; error: string | null; warnings: string[]; output: PrepOutput | null;
+}
+
 export class ApiError extends Error {
   constructor(public status: number, public detail: unknown) {
     super(ApiError.text(detail));
@@ -106,6 +119,10 @@ export const api = {
     call<Record<string, PlanRow>>("POST", "/api/snapshots", { area, options, area_mode, level_override }),
   snap: (area: AreaIn, options: Record<string, unknown>, area_mode: AreaMode, level_override: Level | null) =>
     call<SnapResp>("POST", "/api/area/snap", { area, options, area_mode, level_override }),
+  prep: (body: { area_id: string; pinned?: Record<string, string>; max_minutes?: number; years?: number[] }) =>
+    call<{ job_id: string }>("POST", "/api/prep", body),
+  prepJob: (id: string) => call<PrepJob>("GET", `/api/prep/${id}`),
+  prepRuns: (areaId: string) => call<{ area_id: string; runs: PrepOutput[] }>("GET", `/api/prep/area/${encodeURIComponent(areaId)}`),
   levels: (area: AreaIn, area_mode: AreaMode) => call<LevelJob>("POST", "/api/area/levels", { area, area_mode }),
   levelJob: (id: string) => call<LevelJob>("GET", `/api/area/levels/${id}`),
   fetch: (body: { area: AreaIn; area_mode: AreaMode; level_override: Level | null; sources: string[]; refresh: boolean; pinned: Record<string, string>; options: Record<string, unknown> }) =>

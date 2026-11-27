@@ -26,11 +26,14 @@ API = "https://www.geoboundaries.org/api/current/gbOpen/{iso3}/{level}/"
 
 
 class BoundariesFetcher(Fetcher):
+    OSM_QUERY_TIMEOUT = 170
+    OSM_HTTP_TIMEOUT = 180
     source = "boundaries"
     ttl_days = 365  # borders rarely change
 
     def __init__(self, levels: tuple[str, ...] = ("ADM1", "ADM2"), simplified: bool = True,
                  provider: str = "geoboundaries", overpass_url: str = OVERPASS_URL):
+        """OSM borders: the server gets OSM_QUERY_TIMEOUT s, the client waits a little longer."""
         if provider not in ("geoboundaries", "osm"):
             raise ValueError("provider must be 'geoboundaries' or 'osm'")
         self.levels = tuple(str(lv) for lv in levels)
@@ -80,10 +83,13 @@ class BoundariesFetcher(Fetcher):
         return fc, [meta_url, gj_url]
 
     def _osm(self, area: Area, level: str) -> tuple[dict, list[str]]:
-        q = (f'[out:json][timeout:300];\n'
+        q = (f'[out:json][timeout:{self.OSM_QUERY_TIMEOUT}];\n'
              f'relation["boundary"="administrative"]["admin_level"="{level}"]({_bbox(area)});\n'
              f'out geom tags;')
-        data = overpass(q, self.overpass_url)
+        # A timeout means the query is too heavy (huge border shapes), not that the server is busy:
+        # repeating it on the mirrors can't help, so it fails after one server. Busy (429/5xx) still
+        # moves on to the next mirror.
+        data = overpass(q, self.overpass_url, timeout=self.OSM_HTTP_TIMEOUT, split_on_timeout=True)
         feats = []
         for el in data.get("elements", []):
             geom = relation_to_polygon(el)

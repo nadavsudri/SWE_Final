@@ -24,16 +24,29 @@ def load_api_key(env_file: Path | str = ".env") -> str | None:
 
 def complete_json(prompt: str, api_key: str, model: str | None = None, max_tokens: int = 1024) -> dict:
     """Send one user message, return the first JSON object in the reply."""
+    return complete(prompt, api_key, model, max_tokens)[0]
+
+
+def complete(prompt: str, api_key: str, model: str | None = None, max_tokens: int = 1024,
+             system: str | None = None) -> tuple[dict, dict]:
+    """Like complete_json, also returns usage: {model, input_tokens, output_tokens}."""
+    body = {"model": model or os.environ.get("LEG_LLM_MODEL", DEFAULT_MODEL), "max_tokens": max_tokens,
+            "messages": [{"role": "user", "content": prompt}]}
+    if system:
+        body["system"] = system
     r = requests.post(
         API_URL,
         headers={"x-api-key": api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"},
-        json={"model": model or os.environ.get("LEG_LLM_MODEL", DEFAULT_MODEL), "max_tokens": max_tokens,
-              "messages": [{"role": "user", "content": prompt}]},
-        timeout=120,
+        json=body,
+        timeout=180,
     )
     r.raise_for_status()
-    text = "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+    data = r.json()
+    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
     m = re.search(r"\{.*\}", text, re.S)
     if not m:
         raise ValueError(f"No JSON object in LLM reply: {text[:200]!r}")
-    return json.loads(m.group(0))
+    u = data.get("usage", {})
+    usage = {"model": data.get("model", body["model"]), "input_tokens": u.get("input_tokens", 0),
+             "output_tokens": u.get("output_tokens", 0)}
+    return json.loads(m.group(0)), usage

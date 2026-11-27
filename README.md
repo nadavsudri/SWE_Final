@@ -24,6 +24,9 @@ Input is a **country** (ISO3) plus an **area** inside it: a bounding box, or a G
 | `osm_facilities` | existing hospitals/clinics/doctors | OpenStreetMap (Overpass) | `facilities.geojson` | 30 d |
 | `osm_roads` | road & path network | OpenStreetMap (Overpass) | `roads.geojson` | 60 d |
 | `gtfs` | bus/train schedules | Mobility Database catalog | `gtfs_<id>.zip`, `feeds.json` | 14 d |
+| `friction` | walking minutes per metre (~1 km) | Malaria Atlas Project WCS (2020 walking-only surface) | `friction.tif` | 365 d |
+
+Roads are queried in 0.5° tiles; a tile that times out is split in four (twice at most), so large areas don't time out as one query.
 
 ```bash
 # fetch everything for an area
@@ -71,25 +74,32 @@ data/raw/_downloads/                         shared country-wide downloads (keye
 
 ## Preprocessing (`src/leg/prep`)
 
-Turns the cached snapshots into what the algorithm reads. Fetches anything missing first.
+Turns an area's cached snapshots into the **paper's own file format** (the code of Choo et al. 2026,
+github.com/yohayt/OHCE, which LEG reuses), so the algorithms run unchanged on our data and on theirs.
+Needs `worldpop`, `boundaries` and `friction` (Malaria Atlas walking friction) for the area.
 ```bash
-python -m leg.prep --name negev --iso3 ISR --bbox 34.5,30.5,35.45,31.6 --cell-km 1 --radius-km 10
+python -m leg.data fetch --name wollo --iso3 ETH --bbox 38.6,9.7,40.6,11.7   # prints "-> area <id>"
+python -m leg.prep --area-id <id>                    # options: --years 2026,2027  --max-minutes 120
 # pin inputs for experiments:  --snapshot worldpop=2026-11-12T074642Z
 ```
 Output in `data/processed/<area_id>/<run_id>/`:
 
-| File | Content |
-|---|---|
-| `cells.csv` | `cell_id, lon, lat, population, district_id, is_candidate, already_covered` |
-| `coverage.json` | `{candidate_cell_id: [cell_ids within radius]}` |
-| `districts.csv` | per district: population, covered population, coverage %, cells, candidates, existing facilities |
-| `meta.json` | input snapshot ids, parameters, totals, cells in no district |
+| File | Same as the paper? | Content |
+|---|---|---|
+| `population.csv` | yes | `cell, lat, lon, ADM1, ADM2, ADM3, population, year`: populated cells (≥ 10 people) |
+| `pairwise_costs.csv` | yes | `cell_i, cell_j, lat/lon, ADM1-3 of both, distance`: walking minutes, cells ≤ 10 apart, i < j |
+| `existing.csv` | ours | `cell, lat, lon, source, name, type, snapped_km`: real facilities in their (nearest populated) cell |
+| `districts.csv` | ours | per district: population, population within 120 min of a facility, cells, facilities, fully_inside |
+| `meta.json` | ours | input snapshot ids, settings, grid, totals, time per stage |
 
-- Cells: the 100 m WorldPop grid summed into ~`cell_km` blocks; only cells whose center is in the area.
-- Coverage v1: straight-line distance ≤ `radius_km` (default 10 km ≈ the paper's 2 h walk).
-- `already_covered`: an existing facility is within `radius_km`.
-- Candidates: populated cells (`--candidates all` for every cell).
-- `district_id = -1`: the cell is in no district; counted and printed as a warning.
+- Grid: the friction map's ~0.93 km pixels, as in the paper. `cell` = global row × 43200 + column, so ids are stable.
+- `ADM3` = the planning district (the level the rule chose); `ADM2`/`ADM1` = the two coarser levels (country code when unknown).
+- Walking minutes: least-cost path over friction (minutes per metre) × metres. The paper's code passes
+  1/friction to the path search; we follow the paper's text (a two-hour walk) instead.
+- `pairwise_costs.csv` keeps pairs up to `--keep-minutes` (default = the 120-minute cutoff) to keep the file small.
+
+The algorithms load either format: `Instance.load(<run folder>)`, or the paper's files with
+`python -m leg.algo --population population_1.csv --pairwise pairwise_costs_1.csv --b 10`.
 
 ## Area mode: whole districts (default) or free polygon
 
@@ -101,8 +111,9 @@ the drawing, the rule and each district's choice.
 
 **District level (rule, no LLM).** For each geoBoundaries level ADM1-ADM5 the fetcher counts the
 districts the area would use (snap: >= 50% inside; free: all touched) and picks the finest level
-with 10-100 of them. If geoBoundaries is too coarse (e.g. Israel), OSM admin levels are tried the
-same way. If nothing is in range, the closest level is used with a warning. `--level ADM3` (or an
+with 10-100 of them; the five levels are downloaded in parallel. If geoBoundaries is too coarse
+(e.g. Israel), OSM admin levels 5-8 are tried the same way, one query at a time, stopping once a level
+has more than 100 districts (finer levels only split them further). If nothing is in range, the closest level is used with a warning. `--level ADM3` (or an
 OSM number) overrides the rule. The counts and the choice are saved in `area.json`. This follows the
 paper's data: its districts are Ethiopian woredas (ADM3), several dozen per region. The LLM profile
 now only decides which facilities count as existing.
@@ -125,6 +136,31 @@ The file has no stable download URL, so download it once from
 `data/raw/_manual/ssa_public_health_facilities.xlsx` (`.csv` also works).
 Outside sub-Saharan Africa the source returns no facilities and says why; inside it, a missing file
 is an error that says where to put it. Preprocessing merges these facilities with the OSM ones.
+
+## Expert advice (`src/leg/advice`)
+
+The advice is a file given at the start of a run: one advice per line, free text, any language
+(`#` lines are comments), or a JSON list of strings. As in the paper, an LLM reads it and writes one
+scoring function per advice, `score(plan) -> 0..1`. This happens **once per advice file**, and a person
+approves the functions before any run uses them:
+```bash
+python -m leg.advice prepare advice.txt --prep data/processed/<area>/<run>   # needs ANTHROPIC_API_KEY in .env
+python -m leg.advice show advice.txt        # interpretation, check results, sample scores, code
+python -m leg.advice approve advice.txt     # only approved functions are used
+```
+- Each function gets a plan record per district: population, coverage before/after (people within a
+  two-hour walk), existing and new facilities, cells, `fully_inside` (see `advice/plan.py`).
+- Advice that needs data the plan doesn't have (roads, terrain...) is marked *not measurable*: the
+  planner still reads it, it is not scored.
+- Checks before approval: the code passes an allow-list sandbox (plain Python + `math`, no imports,
+  files, network or while loops), then runs in a separate process with a 10 s limit on five real
+  sample plans of the area: it must return a number in 0-1, the same number twice, and (warning) not
+  the same number for every plan.
+- In the UI (after preprocessing): upload the .txt, follow the progress, read each interpretation and
+  approve. API: `POST /api/advice`, `GET /api/advice/jobs/{id}`, `GET /api/advice[/{key}]`,
+  `POST /api/advice/{key}/approve|recheck` (see `src/leg/api/advice.py`).
+- Saved in `data/advice/<file>_<hash>/` (`scoring.json` + `review.md`). Editing the advice file changes
+  the hash: new functions, new approval. Alignment of a plan = mean over the measurable advice.
 
 ## Placement algorithms (`src/leg/algo`)
 

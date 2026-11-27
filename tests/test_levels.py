@@ -78,12 +78,86 @@ def test_free_mode_counts_touched(tmp_path, drawn):
         choose_level(drawn, mode="snap", min_count=10, fetch=fake(tmp_path, {}))  # nothing at all
 
 
-def test_network_errors_are_not_hidden(tmp_path, drawn):
-    f = fake(tmp_path, {("geoboundaries", "ADM1"): requests.ConnectionError("offline")})
-    with pytest.raises(requests.ConnectionError):
+def test_failed_level_does_not_block_the_others(tmp_path, drawn):
+    f = fake(tmp_path, {("geoboundaries", "ADM1"): shares(1), ("geoboundaries", "ADM2"): shares(2),
+                        ("osm", "6"): requests.ReadTimeout("slow"), ("osm", "8"): shares(30)})
+    c = choose_level(drawn, fetch=f)
+    assert (c.provider, c.level) == ("osm", "8")
+    bad = next(x for x in c.counts if x.level == "6")
+    assert bad.failed and "ReadTimeout" in bad.note
+
+
+def test_failed_finer_level_is_reported(tmp_path, drawn):
+    f = fake(tmp_path, {("geoboundaries", "ADM2"): shares(12),
+                        ("geoboundaries", "ADM3"): requests.ConnectionError("offline")})
+    c = choose_level(drawn, fetch=f)
+    assert c.level == "ADM2" and "could not check geoboundaries ADM3" in c.reason
+
+
+def test_only_failures_raise_with_a_clear_message(tmp_path, drawn):
+    f = fake(tmp_path, {("geoboundaries", "ADM1"): shares(1),
+                        **{("osm", lv): requests.ReadTimeout("slow") for lv in ("5", "6", "7", "8", "9", "10")}})
+    with pytest.raises(RuntimeError, match=r"osm 5 could not be checked.*use the free polygon"):
         choose_level(drawn, fetch=f)
 
 
 def test_llm_profile_no_longer_needs_admin_fields():
     p = validate({"facility_tags": [["amenity", "hospital"]], "rationale": "x"})
     assert p.source == "llm" and p.facility_tags == (("amenity", "hospital"),)
+
+
+def test_geoboundaries_levels_are_fetched_in_parallel(tmp_path, drawn):
+    import time
+    base = fake(tmp_path, {("geoboundaries", f"ADM{i}"): shares(5 * i) for i in range(1, 6)})
+
+    def slow(provider, level):
+        time.sleep(0.3)
+        return base(provider, level)
+    seen = []
+    t = time.time()
+    c = choose_level(drawn, fetch=slow, progress=seen.append)
+    assert time.time() - t < 0.9                     # 5 levels x 0.3 s, at once
+    assert c.level == "ADM5" and c.usable == 25
+    assert [x.level for x in seen] == ["ADM1", "ADM2", "ADM3", "ADM4", "ADM5"]   # reported in level order
+
+
+def test_osm_stops_after_a_level_with_too_many(tmp_path, drawn):
+    calls = []
+    base = fake(tmp_path, {("geoboundaries", "ADM1"): shares(2), ("osm", "5"): shares(3), ("osm", "6"): shares(400)})
+
+    def f(provider, level):
+        calls.append((provider, level))
+        return base(provider, level)
+    c = choose_level(drawn, fetch=f)
+    assert ("osm", "7") not in calls and ("osm", "8") not in calls
+    by = {(x.provider, x.level): x for x in c.counts}
+    assert by[("osm", "7")].skipped and by[("osm", "8")].skipped and "not checked" in by[("osm", "8")].note
+    assert not any(x.level in ("9", "10") for x in c.counts)       # OSM checks levels 5-8 only
+    assert (c.provider, c.level) == ("osm", "5") and not c.in_range  # 3 is closer to 10-100 than 400
+
+
+def test_snapshots_in_the_same_second_do_not_collide(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timezone
+    from leg.data import SnapshotCache
+    from leg.data.fetchers.base import Fetcher
+
+    class F(Fetcher):
+        source, ttl_days = "x", 1
+
+        def __init__(self, n):
+            self.n = n
+
+        def params(self):
+            return {"n": self.n}
+
+        def fetch(self, area, out_dir, downloads_dir):
+            (out_dir / "v.txt").write_text(str(self.n))
+            return {}
+    area = Area.from_bbox("a", "ETH", 38, 10, 39, 11)
+    cache = SnapshotCache(tmp_path)
+    now = datetime(2026, 11, 25, 12, 0, 0, tzinfo=timezone.utc)
+    with ThreadPoolExecutor(8) as pool:
+        snaps = list(pool.map(lambda n: cache.get(F(n), area, now=now), range(8)))
+    assert len({s.id for s in snaps}) == 8
+    assert sorted(int((s.path / "v.txt").read_text()) for s in snaps) == list(range(8))

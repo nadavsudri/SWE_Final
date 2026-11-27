@@ -1,6 +1,7 @@
 """CLI: run the placement methods on a preprocessing output and compare them.
 
   python -m leg.algo data/processed/<area_id>/<run_id> --b 10
+  python -m leg.algo --population population_1.csv --pairwise pairwise_costs_1.csv --b 10   (paper's files)
   python -m leg.algo <prep_dir> --b 10 --allocation "0:4,1:6" --alpha 0.5 --beta 0.8 --out result.json
 
 Methods: greedy, ILP (optimum, with a time limit), random (seeded), and GuidedGreedy when an
@@ -28,7 +29,12 @@ def _allocation(text: str) -> dict[int, int]:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m leg.algo")
-    p.add_argument("prep_dir")
+    p.add_argument("prep_dir", nargs="?", help="preprocessing output folder")
+    p.add_argument("--population", help="paper-format population CSV (instead of prep_dir)")
+    p.add_argument("--pairwise", help="paper-format pairwise_costs CSV (with --population)")
+    p.add_argument("--existing", help="existing.csv (optional, with --population)")
+    p.add_argument("--year", type=int, help="year to plan for (default: earliest in the file)")
+    p.add_argument("--max-minutes", type=float, default=120.0, help="coverage cutoff (paper: 120)")
     p.add_argument("--b", type=int, required=True, help="number of new facilities")
     p.add_argument("--allocation", help='district:count list for GuidedGreedy, e.g. "0:4,1:6"')
     p.add_argument("--alpha", type=float, default=0.5)
@@ -38,7 +44,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--out", help="write all results as JSON")
     a = p.parse_args(argv)
 
-    inst = Instance.load(a.prep_dir)
+    if a.population or a.pairwise:
+        if not (a.population and a.pairwise) or a.prep_dir:
+            p.error("give either prep_dir, or both --population and --pairwise")
+        inst = Instance.from_paper_files(a.population, a.pairwise, a.existing, a.year, a.max_minutes)
+    elif a.prep_dir:
+        inst = Instance.load(a.prep_dir, a.year, a.max_minutes)
+    else:
+        p.error("give prep_dir, or --population and --pairwise")
     total_uncovered = float(inst.weight.sum())
     print(f"{inst.n_cells} cells, {inst.n_candidates} candidates, {len(inst.districts())} districts, "
           f"{total_uncovered:,.0f} people not yet covered; b={a.b}")
@@ -86,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
               f"upper bound {ub:,.0f} (gap {100 * runs['ilp']['gap']:.1f}%). '% of OPT' uses the bound.")
     if a.out:
         with open(a.out, "w") as f:
-            json.dump({"prep_dir": a.prep_dir, "b": a.b, "alpha": a.alpha, "beta": a.beta,
+            json.dump({"prep_dir": a.prep_dir, "population": a.population, "b": a.b, "alpha": a.alpha, "beta": a.beta,
                        "seed": a.seed, "runs": runs}, f, indent=2)
         print(f"\nWrote {a.out}")
     return 1 if failed else 0

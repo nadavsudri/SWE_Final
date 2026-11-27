@@ -1,6 +1,8 @@
-"""CLI:  python -m leg.prep --name negev --iso3 ISR --bbox 34.5,30.5,35.45,31.6 [--cell-km 1] [--radius-km 10]
+"""CLI:  python -m leg.prep --area-id ETH_wollo_ab12cd34 [--years 2026] [--max-minutes 120]
 
-Uses the cached snapshots (fetches whatever is missing), then writes data/processed/<area_id>/<run_id>/.
+Reads the snapshots the fetcher stored in data/raw/<area_id>/ (the newest of each, or --snapshot
+SOURCE=ID) and writes data/processed/<area_id>/<run_id>/ in the paper's format.
+The area id is the one `python -m leg.data fetch` prints ("Snapped to ... -> area <id>").
 """
 from __future__ import annotations
 
@@ -8,52 +10,54 @@ import argparse
 import json
 import sys
 
-from leg.data import Area, SnapshotCache, fetch_all
-from leg.prep import PrepParams, build
-
-NEEDED = ["worldpop", "boundaries", "osm_facilities", "public_facilities"]
+from leg.prep import STAGES, PrepParams
+from leg.prep.run import prepare
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m leg.prep")
-    p.add_argument("--name", required=True)
-    p.add_argument("--iso3", required=True)
-    p.add_argument("--bbox", help="west,south,east,north")
-    p.add_argument("--geojson", help="polygon file instead of --bbox")
+    p.add_argument("--area-id", required=True, help="folder name under data/raw")
     p.add_argument("--root", default="data/raw")
     p.add_argument("--out", default="data/processed")
-    p.add_argument("--cell-km", type=float, default=1.0)
-    p.add_argument("--radius-km", type=float, default=10.0)
-    p.add_argument("--candidates", choices=["populated", "all"], default="populated")
+    p.add_argument("--years", help="comma list of WorldPop years (first = planning year); default: newest snapshot")
+    p.add_argument("--min-population", type=float, default=10.0)
+    p.add_argument("--window", type=int, default=10, help="pairs at most this many cells apart")
+    p.add_argument("--max-minutes", type=float, default=120.0, help="walking time a facility covers")
+    p.add_argument("--keep-minutes", type=float, help="pairs written to pairwise_costs.csv (default = max)")
     p.add_argument("--snapshot", action="append", default=[], metavar="SOURCE=ID",
                    help="pin an input snapshot, e.g. --snapshot worldpop=2026-11-12T074642Z")
     a = p.parse_args(argv)
 
-    if bool(a.bbox) == bool(a.geojson):
-        sys.exit("give exactly one of --bbox or --geojson")
-    area = (Area.from_bbox(a.name, a.iso3, *(float(x) for x in a.bbox.split(",")))
-            if a.bbox else Area.from_geojson(a.name, a.iso3, a.geojson))
-    pinned = dict(s.split("=", 1) for s in a.snapshot)
+    params = PrepParams(min_population=a.min_population, window=a.window, max_minutes=a.max_minutes,
+                        keep_minutes=a.keep_minutes or a.max_minutes)
+    years = [int(y) for y in a.years.split(",")] if a.years else None
+    last = {"stage": None, "pct": -10}
 
-    snaps = fetch_all(area, NEEDED, SnapshotCache(a.root), pinned=pinned)
-    failed = {k: v for k, v in snaps.items() if isinstance(v, Exception)}
-    if failed:
-        for k, v in failed.items():
-            print(f"FAIL {k}: {type(v).__name__}: {v}")
+    def progress(stage, done, total):
+        pct = int(100 * done / total) if total else 0
+        if stage != last["stage"] or pct >= last["pct"] + 10:
+            print(f"  [{STAGES.index(stage) + 1}/{len(STAGES)}] {stage:13s} {pct:3d}%", flush=True)
+            last.update(stage=stage, pct=pct)
+
+    try:
+        out = prepare(a.area_id, a.root, a.out, dict(s.split("=", 1) for s in a.snapshot), params, years, progress)
+    except (FileNotFoundError, ValueError) as e:
+        print(f"ERROR: {e}")
         return 1
-
-    params = PrepParams(a.cell_km, a.radius_km, a.candidates)
-    out = build(snaps["worldpop"], snaps["boundaries"], [snaps["osm_facilities"], snaps["public_facilities"]],
-                area.geometry, a.out, area.area_id, params)
     meta = json.loads((out / "meta.json").read_text())
     t, u = meta["totals"], meta["unassigned"]
     print(f"Wrote {out}")
-    print(f"  cells {t['cells']} (~{meta['real_cell_km']} km), candidates {t['candidates']}, "
-          f"districts {t['districts']}, existing facilities {t['existing_facilities']}")
-    pct = 100 * t["already_covered_population"] / t["population"] if t["population"] else 0
-    print(f"  population {t['population']:,}, already covered {t['already_covered_population']:,} ({pct:.1f}%)")
+    print(f"  {t['cells']} cells, {t['pairs']:,} pairs within {params.keep_minutes:g} min, "
+          f"{t['districts']} districts, {t['existing_facilities']} existing facilities")
+    pct = 100 * t["covered_population"] / t["population"] if t["population"] else 0
+    print(f"  population {t['population']:,}; within {params.max_minutes:g} min of a facility: "
+          f"{t['covered_population']:,} ({pct:.1f}%)")
     if u["cells"]:
         print(f"  WARNING: {u['cells']} cells ({u['population']:,} people) are in no district")
+    if meta["dropped_facilities"]:
+        print(f"  note: {meta['dropped_facilities']} facilities are more than {params.max_snap_km:g} km "
+              f"from any populated cell and were left out")
+    print(f"  time: {meta['seconds']}")
     return 0
 
 

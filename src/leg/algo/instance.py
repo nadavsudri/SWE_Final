@@ -1,7 +1,7 @@
 """A facility-location instance: who lives where, which candidate covers whom, which district is which.
 
-Built from the preprocessing output folder (cells.csv, coverage.json, districts.csv, meta.json)
-or directly from arrays (tests, toy examples).
+Built from the paper's file format (population.csv + pairwise_costs.csv, written by leg.prep or by
+the paper's own preprocessing), or directly from lists (tests, toy examples).
 
 Objective (as in the paper, Eq. 1): f(S) = population in cells covered by at least one site in S.
 Cells already covered by an existing facility count 0, so f measures the *improvement* in
@@ -60,25 +60,65 @@ class Instance:
         return cls(np.where(done, 0.0, pop), pop, dist, np.array(cands), A, district_names or {})
 
     @classmethod
-    def load(cls, prep_dir: Path | str) -> "Instance":
-        d = Path(prep_dir)
-        with open(d / "cells.csv", newline="") as f:
-            rows = list(csv.DictReader(f))
-        n = len(rows)
-        pop = np.zeros(n)
-        dist = np.full(n, -1, dtype=int)
-        done = np.zeros(n, bool)
+    def from_paper_files(cls, population_csv: Path | str, pairwise_csv: Path | str,
+                         existing_csv: Path | str | None = None, year: int | None = None,
+                         max_minutes: float = 120.0) -> "Instance":
+        """Load the paper's format (population_*.csv + pairwise_costs_*.csv), ours or theirs.
+
+        As in the paper's code: rows without ADM1 are skipped; districts are (ADM1, ADM2, ADM3);
+        every populated cell is a candidate; a cell covers itself and every cell within
+        `max_minutes` (pairs count both ways). `year` defaults to the earliest year in the file.
+        Existing facilities (our existing.csv) make their cells and neighbours already covered."""
+        with open(population_csv, newline="") as f:
+            rows = [r for r in csv.DictReader(f) if r["ADM1"].strip() and r["ADM1"] != "nan"]
+        if not rows:
+            raise ValueError(f"{population_csv} has no usable rows")
+        year = year if year is not None else min(int(float(r["year"])) for r in rows)
+        rows = [r for r in rows if int(float(r["year"])) == year]
+        index: dict[int, int] = {}
+        pop, dist, keys = [], [], {}
         for r in rows:
-            i = int(r["cell_id"])
-            pop[i] = float(r["population"])
-            dist[i] = int(r["district_id"])
-            done[i] = r["already_covered"] == "1"
-        cov = {int(k): v for k, v in json.loads((d / "coverage.json").read_text()).items()}
-        names = {}
-        if (d / "districts.csv").exists():
-            with open(d / "districts.csv", newline="") as f:
-                names = {int(r["district_id"]): r["name"] for r in csv.DictReader(f)}
-        inst = cls.from_lists(pop, dist, cov, done, names)
-        inst.meta = json.loads((d / "meta.json").read_text()) if (d / "meta.json").exists() else {}
+            c = int(float(r["cell"]))
+            if c in index:
+                continue
+            index[c] = len(pop)
+            pop.append(float(r["population"]))
+            key = (r["ADM1"], r["ADM2"], r["ADM3"])
+            dist.append(keys.setdefault(key, len(keys)))
+        n = len(pop)
+        src, dst = list(range(n)), list(range(n))  # every cell covers itself
+        with open(pairwise_csv, newline="") as f:
+            for r in csv.DictReader(f):
+                d = r["distance"]
+                if not d or d == "nan" or float(d) > max_minutes:
+                    continue
+                i, j = index.get(int(float(r["cell_i"]))), index.get(int(float(r["cell_j"])))
+                if i is None or j is None:
+                    continue
+                src += [i, j]
+                dst += [j, i]
+        A = sparse.csr_matrix((np.ones(len(src)), (src, dst)), shape=(n, n))
+        A.data[:] = 1.0  # duplicate pairs collapse to 1
+        pop_a = np.asarray(pop)
+        done = np.zeros(n, bool)
+        if existing_csv is not None and Path(existing_csv).exists():
+            with open(existing_csv, newline="") as f:
+                ex = [index[int(float(r["cell"]))] for r in csv.DictReader(f) if int(float(r["cell"])) in index]
+            if ex:
+                done = np.asarray(A[sorted(set(ex))].sum(axis=0)).ravel() > 0
+        names = {v: k[2] for k, v in keys.items()}
+        inst = cls(np.where(done, 0.0, pop_a), pop_a, np.asarray(dist), np.arange(n), A, names)
+        inst.meta = {"year": year, "max_minutes": max_minutes, "districts": {v: list(k) for k, v in keys.items()},
+                     "cell_ids": list(index)}
+        return inst
+
+    @classmethod
+    def load(cls, prep_dir: Path | str, year: int | None = None, max_minutes: float = 120.0) -> "Instance":
+        """A preprocessing output folder (population.csv, pairwise_costs.csv, existing.csv, meta.json)."""
+        d = Path(prep_dir)
+        inst = cls.from_paper_files(d / "population.csv", d / "pairwise_costs.csv", d / "existing.csv",
+                                    year, max_minutes)
+        if (d / "meta.json").exists():
+            inst.meta = json.loads((d / "meta.json").read_text()) | inst.meta
         inst.meta["prep_dir"] = str(d)
         return inst

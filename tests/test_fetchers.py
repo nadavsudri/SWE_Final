@@ -2,6 +2,7 @@
 import json
 
 import pytest
+import requests
 import rasterio
 import responses
 
@@ -177,3 +178,131 @@ def test_facility_query_from_tags(area):
     assert 'nwr["amenity"="hospital"]' in q
     assert 'nwr["emergency"="ambulance_station"]' in q
     assert 'nwr["healthcare"](' in q
+
+
+
+@responses.activate
+def test_overpass_falls_back_to_mirror_and_rejects_partial(tmp_path, area):
+    from leg.data.fetchers.osm import OVERPASS_MIRRORS, overpass
+    responses.post(OVERPASS_MIRRORS[0], body=requests.ReadTimeout("slow"))
+    responses.post(OVERPASS_MIRRORS[1], json={"elements": [], "remark": "runtime error: Query timed out"})
+    responses.post(OVERPASS_MIRRORS[2], json={"elements": [{"type": "node", "id": 1}]})
+    assert overpass("q")["elements"] == [{"type": "node", "id": 1}]
+    assert [c.request.url for c in responses.calls] == list(OVERPASS_MIRRORS)
+
+
+@responses.activate
+def test_overpass_timeout_everywhere_saves_no_snapshot(tmp_path, area):
+    from leg.data.fetchers.osm import OVERPASS_MIRRORS
+    for u in OVERPASS_MIRRORS:
+        responses.post(u, json={"elements": [], "remark": "runtime error: Query timed out"})
+    cache = SnapshotCache(tmp_path)
+    with pytest.raises(RuntimeError, match="did not finish"):
+        cache.get(OsmFacilitiesFetcher(), area)
+    assert cache.list(area, "osm_facilities") == []
+
+
+# ---------- Malaria Atlas friction ----------
+def _friction_tif(tmp_path):
+    import numpy as np
+    from rasterio.transform import from_origin
+    p = tmp_path / "f.tif"
+    with rasterio.open(p, "w", driver="GTiff", height=2, width=2, count=1, dtype="float32",
+                       crs="EPSG:4326", transform=from_origin(34.0, 32.0, 1 / 120, 1 / 120), nodata=-9999) as d:
+        d.write(np.array([[[0.012, 0.02], [-9999, 0.015]]], dtype="float32"))
+    return p.read_bytes()
+
+
+@responses.activate
+def test_friction_fetch_and_axis_fallback(tmp_path, area):
+    from leg.data.fetchers import FrictionFetcher
+    from leg.data.fetchers.friction import AXES, WCS_URL
+    f = FrictionFetcher()
+    responses.get(WCS_URL, body=b"<ows:ExceptionReport>bad axis</ows:ExceptionReport>")  # first axis names
+    responses.get(WCS_URL, body=_friction_tif(tmp_path))
+    snap = SnapshotCache(tmp_path / "c").get(f, area)
+    assert snap.manifest["summary"]["valid_pixels"] == 3
+    assert "subset=lat(" in snap.manifest["urls"][0] and AXES[1] == ("lat", "long")
+    assert "Walking_Only_Friction" in responses.calls[0].request.url
+    w, s, e, n = area.bbox
+    assert f"Long({w - 0.1}," in responses.calls[0].request.url  # 0.1 degree margin
+
+
+@responses.activate
+def test_friction_error_saves_no_snapshot(tmp_path, area):
+    from leg.data.fetchers import FrictionFetcher
+    from leg.data.fetchers.friction import WCS_URL
+    responses.get(WCS_URL, body=b"<xml>nope</xml>")
+    with pytest.raises(RuntimeError, match="friction download failed"):
+        SnapshotCache(tmp_path).get(FrictionFetcher(), area)
+    assert not list((tmp_path / area.area_id / "friction").glob("*/manifest.json"))
+
+
+def test_friction_rejects_bad_mode():
+    from leg.data.fetchers import FrictionFetcher
+    with pytest.raises(ValueError):
+        FrictionFetcher(mode="flying")
+
+
+def test_roads_tiles_and_dedup(tmp_path):
+    from leg.data.fetchers.osm import tiles
+    assert len(tiles((34.0, 30.0, 35.2, 31.0), 0.5)) == 3 * 2
+    big = Area.from_bbox("big", "ISR", 34.0, 30.0, 35.0, 31.0)
+    way = {"type": "way", "id": 7, "tags": {"highway": "track"},
+           "geometry": [{"lat": 30.4, "lon": 34.4}, {"lat": 30.6, "lon": 34.6}]}  # crosses all 4 tiles
+    with responses.RequestsMock() as rs:
+        rs.post(OVERPASS_URL, json={"elements": [way]})
+        snap = SnapshotCache(tmp_path).get(OsmRoadsFetcher(tile_deg=0.5), big)
+        assert len(rs.calls) == 4
+    s = snap.manifest["summary"]
+    assert s["ways"] == 1 and s["tiles"] == 4 and s["splits"] == 0
+
+
+def test_roads_splits_a_tile_that_times_out(tmp_path):
+    small = Area.from_bbox("s", "ISR", 34.0, 30.0, 34.4, 30.4)  # one tile
+    way = {"type": "way", "id": 1, "tags": {"highway": "path"},
+           "geometry": [{"lat": 30.1, "lon": 34.1}, {"lat": 30.2, "lon": 34.2}]}
+    with responses.RequestsMock() as rs:
+        rs.post(OVERPASS_URL, body=requests.Timeout("slow"))      # whole tile: too big
+        rs.post(OVERPASS_URL, json={"elements": [way]})            # each quarter answers
+        snap = SnapshotCache(tmp_path).get(OsmRoadsFetcher(), small)
+        assert len(rs.calls) == 1 + 4   # no mirror tried for the timeout; split at once
+    s = snap.manifest["summary"]
+    assert s["splits"] == 1 and s["queries"] == 4 and s["ways"] == 1
+
+
+def test_roads_gives_up_after_max_splits(tmp_path):
+    small = Area.from_bbox("s", "ISR", 34.0, 30.0, 34.4, 30.4)
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rs:
+        rs.post(OVERPASS_URL, json={"remark": "runtime error: Query timed out in \"query\" at line 2"})
+        with pytest.raises(RuntimeError, match="after 1 splits"):
+            SnapshotCache(tmp_path).get(OsmRoadsFetcher(max_splits=1), small)
+        assert len(rs.calls) == 2   # the whole tile, then the first quarter: it stops there
+    assert not list((tmp_path / small.area_id / "osm_roads").glob("*/manifest.json"))
+
+
+def test_osm_boundaries_timeout_does_not_retry_on_mirrors(tmp_path, area):
+    """A timed-out border query is too heavy: one server, then fail (no 3 x 180 s wait)."""
+    from leg.data.fetchers import BoundariesFetcher
+    from leg.data.fetchers.osm import OVERPASS_MIRRORS, QueryTooBig
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rs:
+        for u in OVERPASS_MIRRORS:
+            rs.post(u, body=requests.Timeout("slow"))
+        with pytest.raises(QueryTooBig):
+            SnapshotCache(tmp_path).get(BoundariesFetcher(provider="osm", levels=("6",)), area)
+        assert len(rs.calls) == 1
+
+
+def test_osm_boundaries_busy_server_tries_mirror(tmp_path, area):
+    from leg.data.fetchers import BoundariesFetcher
+    from leg.data.fetchers.osm import OVERPASS_MIRRORS
+    w, s, e, n = area.bbox
+    rel = {"type": "relation", "id": 5, "tags": {"name": "R", "admin_level": "6", "boundary": "administrative"},
+           "members": [{"type": "way", "role": "outer", "geometry": [
+               {"lat": s, "lon": w}, {"lat": s, "lon": e}, {"lat": n, "lon": e}, {"lat": n, "lon": w}, {"lat": s, "lon": w}]}]}
+    with responses.RequestsMock(assert_all_requests_are_fired=False) as rs:
+        rs.post(OVERPASS_MIRRORS[0], status=429)
+        rs.post(OVERPASS_MIRRORS[1], json={"elements": [rel]})
+        snap = SnapshotCache(tmp_path).get(BoundariesFetcher(provider="osm", levels=("6",)), area)
+        assert len(rs.calls) == 2
+    assert snap.manifest["summary"]["districts"] == 1

@@ -414,18 +414,7 @@ def levelled(monkeypatch):
         return {"urls": [], "params": self.params(), "summary": {"districts": n}}
 
     monkeypatch.setattr(BoundariesFetcher, "fetch", fake_fetch)
-    # snapshot ids are timestamps to the second: give the cache a clock that ticks per call
-    import leg.data.cache as cache_mod
-    from leg.api import levels as levels_api
-    tick = {"n": 0}
-
-    class Clock(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            tick["n"] += 1
-            return datetime(2026, 11, 25, 12, 0, 0, tzinfo=timezone.utc) + timedelta(seconds=tick["n"])
-    monkeypatch.setattr(cache_mod, "datetime", Clock)
-    monkeypatch.setattr(levels_api.LevelManager, "MIN_GAP_S", 0.0)
+    # no fake clock: parallel probes in the same second must not collide in the cache
     return probes
 
 
@@ -448,6 +437,8 @@ def test_levels_job_reports_probes_and_the_rules_choice(client, levelled):
     counts = {x["level"]: (x["available"], x["touched"], x["usable"]) for x in c["counts"]}
     assert counts["ADM3"] == (True, 150, 150) and counts["ADM4"][0] is False
     assert [(p["level"], p["state"]) for p in v["probed"]][:3] == [("ADM1", "downloaded"), ("ADM2", "downloaded"), ("ADM3", "downloaded")]
+    assert [p["usable"] for p in v["probed"]][:3] == [counts["ADM1"][2], 15, 150]   # in level order, with counts
+    assert v["in_progress"] == [] and all(p["seconds"] is not None for p in v["probed"])
     # the same drawing again answers from the finished job; a new job would hit the cached probes
     again = client.post("/api/area/levels", json={"area": SNAP_AREA, "area_mode": {"mode": "snap"}}).json()
     assert again["job_id"] == j["job_id"] and again["status"] == "done"
@@ -493,3 +484,128 @@ def test_level_override_replaces_the_rule_and_is_saved(client, root, monkeypatch
     assert rec["level_override"] == override and rec["level_choice"]["level"] == "ADM2"
     saved = client.get("/api/areas").json()[0]
     assert saved["level_override"] == override and saved["level_choice"]["level"] == "ADM2"
+
+
+# ---------------------------------------------------------------- preprocessing job
+def _wait_prep(client, job_id, timeout=10):
+    t = time.time()
+    while time.time() - t < timeout:
+        v = client.get(f"/api/prep/{job_id}").json()
+        if not v["running"] and v["status"] in ("done", "failed"):
+            return v
+        time.sleep(0.05)
+    raise AssertionError("prep job did not finish")
+
+
+def test_prep_job_reports_progress_and_output(client, root, tmp_path):
+    from test_prep import _raw_area
+    raw, area_id = _raw_area(tmp_path / "p")
+    import shutil
+    shutil.copytree(raw / area_id, root / area_id)
+    for d in raw.iterdir():  # the level probes folder too (parents for ADM1/ADM2)
+        if not (root / d.name).exists():
+            shutil.copytree(d, root / d.name)
+    job = client.post("/api/prep", json={"area_id": area_id}).json()["job_id"]
+    v = _wait_prep(client, job)
+    assert v["status"] == "done" and v["percent"] == 100 and v["error"] is None
+    out = v["output"]
+    assert out["totals"]["cells"] == 99 and "pairwise_costs.csv" in out["files"]
+    assert out["planning_year"] == 2026 and out["params"]["max_minutes"] == 120
+    runs = client.get(f"/api/prep/area/{area_id}").json()["runs"]
+    assert [r["run_id"] for r in runs] == [out["run_id"]]
+
+
+def test_prep_job_errors(client, root, tmp_path):
+    assert client.post("/api/prep", json={"area_id": "nope"}).status_code == 404
+    assert client.post("/api/prep", json={"area_id": "../x"}).status_code == 404
+    assert client.get("/api/prep/unknown").status_code == 404
+    (root / "ETH_x_1").mkdir(parents=True)
+    (root / "ETH_x_1" / "area.json").write_text('{"mode": "free", "drawn_area": {"properties": {"iso3": "ETH"}}}')
+    assert client.post("/api/prep", json={"area_id": "ETH_x_1", "max_minutes": -1}).status_code == 400
+    job = client.post("/api/prep", json={"area_id": "ETH_x_1"}).json()["job_id"]
+    v = _wait_prep(client, job)
+    assert v["status"] == "failed" and "friction" in v["error"]
+
+
+def test_prep_percent_is_weighted():
+    from leg.api.prep import PrepJob
+    j = PrepJob("a", {}, __import__("leg.prep", fromlist=["PrepParams"]).PrepParams(), None)
+    assert j.percent() == 0
+    j.progress("travel_times", 50, 100)
+    assert j.percent() == 5 + 3 + 41
+
+
+# ---------------------------------------------------------------- advice upload + scoring
+GOOD_CODE = "def score(plan):\n    ds = plan['districts']\n    return sum(1 for d in ds if d['new_facilities'] >= 1) / len(ds)\n"
+
+
+def _advice_client(root, tmp_path, codes, measurable=None):
+    from leg.api.settings import Settings
+    from leg.prep import PrepParams, build
+    from test_prep import AREA, make_inputs
+    wp, bd, fc, fr, parents = make_inputs(tmp_path / "inputs")
+    run = build(wp, bd, [fc], fr, AREA, root.parent / "processed", "ETH_t", PrepParams(max_minutes=30), parents=parents)
+
+    def llm(prompt):
+        items = [{"advice": "x", "measurable": True if measurable is None else measurable[i],
+                  "interpretation": f"reading {i}", "code": c} for i, c in enumerate(codes)]
+        return {"items": items}, {"model": "fake", "input_tokens": 10, "output_tokens": 5}
+    c = TestClient(create_app(Settings(root=root, env_file=tmp_path / "none.env"), advice_llm=lambda: llm))
+    return c, run
+
+
+def _wait_advice(client, job_id, timeout=30):
+    t = time.time()
+    while time.time() - t < timeout:
+        v = client.get(f"/api/advice/jobs/{job_id}").json()
+        if not v["running"] and v["status"] in ("done", "failed"):
+            return v
+        time.sleep(0.05)
+    raise AssertionError("advice job did not finish")
+
+
+def test_advice_upload_score_and_approve(root, tmp_path):
+    c, run = _advice_client(root, tmp_path, [GOOD_CODE, None], [True, False])
+    body = {"filename": "my advice.txt", "text": "# notes\nEvery district gets one\nNear the main road\n",
+            "area_id": "ETH_t", "run_id": run.name, "budget": 2}
+    job = c.post("/api/advice", json=body).json()["job_id"]
+    v = _wait_advice(c, job)
+    assert v["status"] == "done" and v["stage"] == "saving" and v["error"] is None
+    r = v["result"]
+    assert r["file"] == "my-advice.txt" and r["model"] == "fake" and r["approved_at"] is None and r["can_approve"]
+    assert [i["measurable"] for i in r["items"]] == [True, False]
+    assert r["items"][0]["passed"] and len(r["items"][0]["sample_scores"]) == 5 and "NOT APPROVED" in r["review_md"]
+    assert [s["key"] for s in c.get("/api/advice").json()["sets"]] == [r["key"]]
+    ok = c.post(f"/api/advice/{r['key']}/approve").json()
+    assert ok["approved_at"]
+    again = c.post(f"/api/advice/{r['key']}/recheck").json()   # rechecking clears the approval
+    assert again["approved_at"] is None and again["items"][0]["passed"]
+
+
+def test_advice_failed_check_cannot_be_approved(root, tmp_path):
+    c, run = _advice_client(root, tmp_path, ["def score(plan):\n    return 3.0\n"])
+    job = c.post("/api/advice", json={"filename": "a.txt", "text": "x\n", "area_id": "ETH_t", "run_id": run.name}).json()["job_id"]
+    r = _wait_advice(c, job)["result"]
+    assert not r["can_approve"] and "outside 0-1" in r["items"][0]["errors"][0]
+    resp = c.post(f"/api/advice/{r['key']}/approve")
+    assert resp.status_code == 400 and "failed the checks" in resp.json()["detail"]["errors"][0]
+
+
+def test_advice_upload_errors(root, tmp_path):
+    c, run = _advice_client(root, tmp_path, [GOOD_CODE])
+    base = {"filename": "a.txt", "text": "x\n", "area_id": "ETH_t", "run_id": run.name}
+    assert c.post("/api/advice", json=base | {"filename": "a.pdf"}).status_code == 400
+    assert c.post("/api/advice", json=base | {"text": "# only a comment\n"}).status_code == 400
+    assert c.post("/api/advice", json=base | {"text": "x" * 70_000}).status_code == 400
+    assert c.post("/api/advice", json=base | {"run_id": "nope"}).status_code == 404
+    assert c.post("/api/advice", json=base | {"area_id": "../etc"}).status_code == 404
+    assert c.get("/api/advice/unknown").status_code == 404
+    assert c.get("/api/advice/uploads").status_code == 404
+    assert c.get("/api/advice/jobs/nope").status_code == 404
+    from leg.api.settings import Settings
+
+    def no_key():
+        raise RuntimeError("Writing the scoring functions needs the Claude API key")
+    c2 = TestClient(create_app(Settings(root=root, env_file=tmp_path / "none.env"), advice_llm=no_key))
+    r = c2.post("/api/advice", json=base)
+    assert r.status_code == 400 and "API key" in r.json()["detail"]["errors"][0]

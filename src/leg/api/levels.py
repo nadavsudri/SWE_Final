@@ -28,13 +28,20 @@ class LevelJob:
         self.id = uuid.uuid4().hex[:12]
         self.key, self.drawn, self.mode, self.min_share = key, drawn, mode, min_share
         self.status, self.error, self.choice = "running", None, None
-        self.probing: dict | None = None
+        self.in_progress: dict[tuple, float] = {}   # (provider, level) -> start time
+        self.fetch_state: dict[tuple, str] = {}     # (provider, level) -> cached | downloaded
         self.probed: list[dict] = []
+        self.seconds: dict[tuple, float] = {}
         self.lock = threading.Lock()
 
     def view(self) -> dict:
+        now = time.time()
         with self.lock:
-            return {"job_id": self.id, "status": self.status, "probing": self.probing, "probed": list(self.probed),
+            running = [{"provider": p, "level": lv, "elapsed_s": round(now - t, 1)}
+                       for (p, lv), t in sorted(self.in_progress.items(), key=lambda kv: kv[1])]
+            # `probing` (the first level still running) is kept for the current UI; `in_progress` lists all
+            return {"job_id": self.id, "status": self.status, "probing": running[0] if running else None,
+                    "in_progress": running, "probed": list(self.probed),
                     "choice": self.choice.to_json() if self.choice else None, "error": self.error,
                     "area_id": self.drawn.area_id, "mode": self.mode, "min_share": self.min_share}
 
@@ -42,10 +49,6 @@ class LevelJob:
 class LevelManager:
     """One job per (drawing, mode, min_share). A finished job answers again at once; the probes
     behind it are cached snapshots, so even a new job for the same drawing is quick."""
-
-    # Snapshot ids are UTC timestamps to the second, so two levels of one drawing fetched within the
-    # same second collide in SnapshotCache. Until leg.data fixes that, new probes are spaced out.
-    MIN_GAP_S = 1.05
 
     def __init__(self, cache: SnapshotCache):
         self.cache = cache
@@ -71,38 +74,54 @@ class LevelManager:
         return job.choice if job and job.status == "done" else None
 
     def _run(self, job: LevelJob) -> None:
-        last_new = [0.0]
-
         def cached(fetcher) -> bool:
             now = datetime.now(timezone.utc)
             return any(s.manifest.get("params") == fetcher.params() and now - s.fetched_at < timedelta(days=fetcher.ttl_days)
                        for s in self.cache.list(job.drawn, fetcher.source))
 
-        def fetch(provider: str, level: str):
+        def fetch(provider: str, level: str):  # called from several threads (geoBoundaries levels in parallel)
             fetcher = BoundariesFetcher(levels=(level,), provider=provider)
             was_cached = cached(fetcher)
-            if not was_cached:
-                time.sleep(max(0.0, self.MIN_GAP_S - (time.time() - last_new[0])))
+            key = (provider, level)
             with job.lock:
-                job.probing = {"provider": provider, "level": level}
+                job.in_progress[key] = time.time()
             try:
                 snap = self.cache.get(fetcher, job.drawn)
             except Exception as e:
                 with job.lock:
-                    job.probed.append({"provider": provider, "level": level, "state": _state(e)})
+                    job.fetch_state[key] = _state(e)
                 raise
+            finally:
+                with job.lock:
+                    job.seconds[key] = round(time.time() - job.in_progress.pop(key), 1)
             with job.lock:
-                if not was_cached:
-                    last_new[0] = time.time()
-                job.probed.append({"provider": provider, "level": level, "state": "cached" if was_cached else "downloaded"})
+                job.fetch_state[key] = "cached" if was_cached else "downloaded"
             return snap
 
+        def progress(c) -> None:  # called in level order, coarse to fine, as each result is known
+            key = (c.provider, c.level)
+            if c.skipped:
+                state = "skipped"
+            elif c.failed:
+                state = "failed"
+            elif not c.available:
+                state = "missing"
+            elif c.note == "no unit in the area":
+                state = "no unit"
+            else:
+                state = job.fetch_state.get(key, "downloaded")
+            with job.lock:
+                job.probed.append({"provider": c.provider, "level": c.level, "state": state,
+                                   "touched": c.touched, "usable": c.usable, "note": c.note,
+                                   "seconds": job.seconds.get(key)})
+
         try:
-            choice = levels_mod.choose_level(job.drawn, self.cache, job.mode, job.min_share, fetch=fetch)
+            choice = levels_mod.choose_level(job.drawn, self.cache, job.mode, job.min_share, fetch=fetch,
+                                             progress=progress)
         except Exception as e:
             with job.lock:
-                job.status, job.probing = "failed", None
+                job.status, job.in_progress = "failed", {}
                 job.error = str(e) if isinstance(e, ValueError) else f"{type(e).__name__}: {e}"
             return
         with job.lock:
-            job.status, job.probing, job.choice = "done", None, choice
+            job.status, job.in_progress, job.choice = "done", {}, choice

@@ -17,6 +17,7 @@ Every count is reported, so the UI can show the table and let the user override 
 from __future__ import annotations
 
 import math
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 
 import requests
@@ -26,7 +27,7 @@ from leg.data.cache import Snapshot, SnapshotCache
 from leg.data.snap import DEFAULT_MIN_SHARE, touched_districts
 
 GEOBOUNDARIES_LEVELS = ("ADM1", "ADM2", "ADM3", "ADM4", "ADM5")
-OSM_LEVELS = ("5", "6", "7", "8", "9", "10")
+OSM_LEVELS = ("5", "6", "7", "8")  # 9-10 are neighbourhoods: rarely whole districts, heaviest queries
 MIN_COUNT, MAX_COUNT = 10, 100
 
 
@@ -38,6 +39,8 @@ class LevelCount:
     touched: int = 0       # districts the drawing touches
     usable: int = 0        # districts the rule counts (snap: >= min_share inside; free: touched)
     note: str = ""
+    failed: bool = False   # the source didn't answer (timeout, network); the level is unknown
+    skipped: bool = False  # not fetched: a coarser level already had more than max_count districts
 
 
 @dataclass
@@ -79,9 +82,12 @@ def _distance(n: int, lo: int, hi: int) -> float:
 
 def choose_level(drawn: Area, cache: SnapshotCache | None = None, mode: str = "snap",
                  min_share: float = DEFAULT_MIN_SHARE, min_count: int = MIN_COUNT,
-                 max_count: int = MAX_COUNT, refresh: bool = False, fetch=None) -> LevelChoice:
+                 max_count: int = MAX_COUNT, refresh: bool = False, fetch=None,
+                 progress=None) -> LevelChoice:
     """fetch(provider, level) -> boundaries Snapshot for `drawn`; defaults to the cached fetcher.
-    Raises on network/server failures; a level the source doesn't have is skipped."""
+    progress(LevelCount) is called as each level's result is known (for the UI).
+    geoBoundaries levels are fetched in parallel; OSM levels one by one (a shared public server).
+    A level the source doesn't have, or one that failed, is recorded and the others still count."""
     if mode not in ("snap", "free"):
         raise ValueError("mode must be 'snap' or 'free'")
     if not 0 < min_count <= max_count:
@@ -95,37 +101,78 @@ def choose_level(drawn: Area, cache: SnapshotCache | None = None, mode: str = "s
 
     counts: list[LevelCount] = []
 
-    def probe(provider: str, levels) -> None:
+    def probe_one(provider: str, lv: str) -> LevelCount:
+        try:
+            feats = touched_districts(fetch(provider, lv))
+        except ValueError as e:
+            if "intersect" in str(e):  # the level exists but has no unit in this area
+                return LevelCount(provider, lv, True, 0, 0, note="no unit in the area")
+            raise
+        except Exception as e:  # noqa: BLE001 - classified below
+            if _missing_level(e):
+                return LevelCount(provider, lv, False, note=str(e)[:200])
+            # timeout / network / server error: record it and go on with the other levels
+            return LevelCount(provider, lv, False, note=f"{type(e).__name__}: {str(e)[:200]}", failed=True)
+        return LevelCount(provider, lv, True, len(feats), _count(feats, mode, min_share))
+
+    def add(c: LevelCount) -> None:
+        counts.append(c)
+        if progress:
+            progress(c)
+
+    def skipped(provider: str, lv: str) -> LevelCount:
+        return LevelCount(provider, lv, False, note=f"not checked: a coarser level already has more than "
+                                                    f"{max_count} districts", skipped=True)
+
+    def probe(provider: str, levels, parallel: bool) -> None:
+        if parallel:
+            # geoBoundaries: one independent file per level, so all levels download at once; the wait
+            # is the slowest level instead of the sum. Results are still added coarse to fine.
+            with ThreadPoolExecutor(max_workers=len(levels)) as pool:
+                for c in pool.map(lambda lv: probe_one(provider, lv), levels):
+                    add(c)
+            return
+        # Overpass is a shared public server: one query at a time. Finer levels only split districts
+        # further, so once a level has more than max_count usable districts the rest are skipped.
+        over = False
         for lv in levels:
-            try:
-                feats = touched_districts(fetch(provider, lv))
-            except ValueError as e:
-                if "intersect" in str(e):  # the level exists but has no unit in this area
-                    counts.append(LevelCount(provider, lv, True, 0, 0, note="no unit in the area"))
-                    continue
-                raise
-            except Exception as e:  # noqa: BLE001 - classified below
-                if _missing_level(e):
-                    counts.append(LevelCount(provider, lv, False, note=str(e)[:200]))
-                    continue
-                raise
-            counts.append(LevelCount(provider, lv, True, len(feats), _count(feats, mode, min_share)))
+            if over:
+                add(skipped(provider, lv))
+                continue
+            c = probe_one(provider, lv)
+            add(c)
+            over = c.available and c.usable > max_count
 
     def best() -> LevelCount | None:
         ok = [c for c in counts if c.available and min_count <= c.usable <= max_count]
         return ok[-1] if ok else None  # levels are probed coarse to fine: last = finest
 
-    probe("geoboundaries", GEOBOUNDARIES_LEVELS)
+    probe("geoboundaries", GEOBOUNDARIES_LEVELS, parallel=True)
     pick = best()
     finest_gb = next((c for c in reversed(counts) if c.available), None)
     if pick is None and (finest_gb is None or finest_gb.usable < min_count):
-        probe("osm", OSM_LEVELS)
+        probe("osm", OSM_LEVELS, parallel=False)
         pick = best()
 
     rule = {"mode": mode, "min_share": min_share, "min_count": min_count, "max_count": max_count}
+    failed = [c for c in counts if c.failed]
     if pick is not None:
-        return LevelChoice(pick.provider, pick.level, pick.usable, True,
-                           f"finest level with {min_count}-{max_count} usable districts", counts, rule)
+        finer_failed = [c for c in failed if counts.index(c) > counts.index(pick)]
+        reason = f"finest level with {min_count}-{max_count} usable districts"
+        if finer_failed:
+            reason += (f"; could not check {', '.join(f'{c.provider} {c.level}' for c in finer_failed)} "
+                       f"(source did not answer), retry to include them")
+        return LevelChoice(pick.provider, pick.level, pick.usable, True, reason, counts, rule)
+    if failed:
+        checked = [c for c in counts if c.available]
+        seen = ", ".join(f"{c.provider} {c.level}: {c.usable} of {c.touched}" for c in checked) or "none"
+        what = "whole districts (at least half inside)" if mode == "snap" else "districts"
+        raise RuntimeError(
+            f"No district level to {'snap to' if mode == 'snap' else 'use'}. Levels checked have too few "
+            f"{what} in this area ({seen}); "
+            + "; ".join(f"{c.provider} {c.level} could not be checked ({c.note})" for c in failed)
+            + ". The districts here are probably larger than the drawing: use the free polygon or draw a "
+              "larger area. Retrying later may let the unchecked levels answer.")
     avail = [c for c in counts if c.available and c.usable > 0]
     if not avail:
         raise ValueError("no administrative level has any usable district for this area; "

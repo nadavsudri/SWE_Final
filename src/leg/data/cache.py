@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -20,6 +21,7 @@ from pathlib import Path
 from leg.data.area import Area
 from leg.data.fetchers.base import Fetcher
 
+_ID_LOCK = threading.Lock()
 MANIFEST = "manifest.json"
 
 
@@ -57,13 +59,14 @@ class SnapshotCache:
         return self.root / area.area_id / source
 
     def list(self, area: Area, source: str) -> list[Snapshot]:
-        """All complete snapshots, oldest first. Folders without a manifest are ignored."""
+        """All complete snapshots, oldest first. Folders without a manifest, and temp folders
+        (".<id>.tmp", possibly mid-write by another thread), are ignored."""
         d = self.source_dir(area, source)
         if not d.exists():
             return []
         snaps = [Snapshot(p, json.loads((p / MANIFEST).read_text()))
-                 for p in d.iterdir() if (p / MANIFEST).exists()]
-        return sorted(snaps, key=lambda s: s.fetched_at)
+                 for p in d.iterdir() if not p.name.startswith(".") and (p / MANIFEST).exists()]
+        return sorted(snaps, key=lambda s: (s.fetched_at, s.path.name))
 
     def pinned(self, area: Area, source: str, snapshot_id: str) -> Snapshot:
         p = self.source_dir(area, source) / snapshot_id
@@ -86,12 +89,20 @@ class SnapshotCache:
 
     def _fetch_new(self, fetcher: Fetcher, area: Area, now: datetime) -> Snapshot:
         base = self.source_dir(area, fetcher.source)
-        snap_id = now.strftime("%Y-%m-%dT%H%M%SZ")
-        final = base / snap_id
-        tmp = base / f".{snap_id}.tmp"
-        if tmp.exists():
-            shutil.rmtree(tmp)
-        tmp.mkdir(parents=True)
+        base.mkdir(parents=True, exist_ok=True)
+        stamp = now.strftime("%Y-%m-%dT%H%M%SZ")
+        # Ids are timestamps to the second; fetches in the same second (parallel level probes) get
+        # -2, -3, ... Picking the id and the final rename happen under one lock, so two threads never
+        # pick the same id; the download itself runs outside it.
+        with _ID_LOCK:
+            for i in range(1, 1000):
+                snap_id = stamp if i == 1 else f"{stamp}-{i}"
+                final, tmp = base / snap_id, base / f".{snap_id}.tmp"
+                if not final.exists() and not tmp.exists():
+                    tmp.mkdir()
+                    break
+            else:
+                raise RuntimeError(f"no free snapshot id for {stamp} in {base}")
         try:
             meta = fetcher.fetch(area, tmp, self.downloads_dir)
         except Exception:
@@ -108,5 +119,6 @@ class SnapshotCache:
                       for p in sorted(tmp.iterdir()) if p.is_file()},
         }
         (tmp / MANIFEST).write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
-        tmp.rename(final)  # atomic: a snapshot is either complete or absent
+        with _ID_LOCK:
+            tmp.rename(final)  # atomic: a snapshot is either complete or absent
         return Snapshot(final, manifest)

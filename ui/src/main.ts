@@ -1,5 +1,5 @@
 import "./styles.css";
-import { api, ApiError, type AreaIn, type AreaMode, type Level, type LevelJob, type SnapResp, type Config, type Country, type Geo, type Job, type JobRow, type PlanRow, type Profile, type SavedArea, type SourceSpec, type Validation } from "./api";
+import { api, ApiError, type AreaIn, type AreaMode, type Level, type LevelJob, type PrepJob, type PrepOutput, type SnapResp, type Config, type Country, type Geo, type Job, type JobRow, type PlanRow, type Profile, type SavedArea, type SourceSpec, type Validation } from "./api";
 import { hydrateIcons, icon } from "./icons";
 import { AreaMap, type Tool } from "./map";
 
@@ -50,7 +50,16 @@ const S = {
   snapError: "",
   levels: null as LevelJob | null,       // the rule's count per level (choose_level), with progress
   levelOverride: null as Level | null,    // the user's level, replacing the rule's choice
+  // snapshots fetched per area (from every finished fetch), so a later friction-only fetch still counts
+  fetched: {} as Record<string, Record<string, string>>,
+  prep: null as PrepJob | null,
+  prepStarting: false,
+  prepError: "",
+  prepRuns: [] as PrepOutput[],
+  prepRunsFor: "",
 };
+const PREP_NEEDS = ["worldpop", "boundaries", "friction"]; // what preprocessing reads besides facilities
+const prepRunning = () => S.prepStarting || S.prep?.status === "running" || S.prep?.status === "queued";
 const levelName = (l: Level) => `${l.provider === "osm" ? "OSM admin level" : "geoBoundaries"} ${l.level}`;
 // the level the area will use: the user's override, else the rule's choice
 const usedLevel = (): Level | null => S.levelOverride ?? (S.levels?.choice ? { provider: S.levels.choice.provider, level: S.levels.choice.level } : null);
@@ -241,40 +250,64 @@ function setLevel(l: Level | null): void {
   schedulePlan();
 }
 
+const LEVEL_ORDER = ["geoboundaries|ADM1", "geoboundaries|ADM2", "geoboundaries|ADM3", "geoboundaries|ADM4", "geoboundaries|ADM5",
+  "osm|5", "osm|6", "osm|7", "osm|8", "osm|9", "osm|10"];
+const shortLevel = (l: Level) => (l.provider === "osm" ? `OSM ${l.level}` : l.level);
+
+/** One row per level, live while the rule checks them (geoBoundaries levels run in parallel). */
+function levelRows(L: LevelJob): string {
+  const done = S.levels?.status === "done";
+  const used = usedLevel(), rule = L.choice;
+  const country = S.countries.find((c) => c.iso3 === S.iso3)?.name ?? S.iso3;
+  const rows = new Map<string, string>();
+  for (const r of L.probed) {
+    const key = `${r.provider}|${r.level}`;
+    const isUsed = done && !!used && used.provider === r.provider && used.level === r.level;
+    const isRule = done && !!rule && rule.provider === r.provider && rule.level === r.level;
+    const t = r.seconds != null ? ` (${r.seconds.toFixed(1)} s${r.state === "cached" ? ", cached" : ""})` : r.state === "cached" ? " (cached)" : "";
+    const text = {
+      downloaded: `${fmtInt(r.usable)} district${r.usable === 1 ? "" : "s"}${t}`,
+      cached: `${fmtInt(r.usable)} district${r.usable === 1 ? "" : "s"}${t}`,
+      missing: "not available",
+      "no unit": "no district in the area",
+      skipped: "not checked (too many at a coarser level)",
+      failed: "server didn't answer",
+    }[r.state];
+    const sub = (r.state === "downloaded" || r.state === "cached") && r.touched !== r.usable
+      ? `<span class="lvl-sub">${fmtInt(r.touched)} touched; ${S.mode === "snap" ? `${pct(S.minShare)}+ inside` : "all count"}</span>` : "";
+    const usable = (r.state === "downloaded" || r.state === "cached") && r.usable > 0;
+    const tag = isUsed && S.levelOverride ? `<span class="stamp carbon">your choice</span>` : isRule ? `<span class="stamp ok">rule's choice</span>` : "";
+    rows.set(key, `<li class="lvl-row ${r.state.replace(" ", "-")}${isUsed ? " chosen" : ""}">
+      ${done ? `<input type="radio" name="lvl" value="${esc(key)}" aria-label="Use ${esc(levelName(r))}" ${isUsed ? "checked" : ""} ${!usable || running() ? "disabled" : ""}/>` : "<span></span>"}
+      <span><b>${esc(shortLevel(r))}</b> — ${r.state === "failed" ? `<span class="lvl-warn"><span class="ic">${icon("alert")}</span>${text}</span>` : text} ${tag}${sub}</span></li>`);
+  }
+  for (const r of L.in_progress ?? []) {
+    const key = `${r.provider}|${r.level}`;
+    if (rows.has(key)) continue;
+    rows.set(key, `<li class="lvl-row checking"><span class="spinner-inline" aria-hidden="true"></span>
+      <span>${esc(country)} · <b>${esc(shortLevel(r))}</b> — checking… ${Math.round(r.elapsed_s)} s</span></li>`);
+  }
+  const ordered = [...rows.entries()].sort(([a], [b]) => LEVEL_ORDER.indexOf(a) - LEVEL_ORDER.indexOf(b)).map(([, v]) => v);
+  return ordered.length ? `<ol class="lvl-list" aria-label="District levels">${ordered.join("")}</ol>` : "";
+}
+
 function levelPanel(): string {
   const L = S.levels;
   if (!L) return `<p class="hint">Appears when the area is set.</p>`;
-  const rowsFor = (counts: { provider: string; level: string; available: boolean; touched: number; usable: number; note?: string }[], live: boolean) => {
-    const used = usedLevel();
-    const rule = L.choice;
-    return `<table class="lvl-table"><caption class="sr-only">Usable districts per level</caption>
-      <thead><tr><th scope="col"><span class="sr-only">Use</span></th><th scope="col">Level</th><th scope="col" class="num">Touched</th><th scope="col" class="num" title="${S.mode === "snap" ? `at least ${pct(S.minShare)} inside the drawing` : "every district the drawing touches"}">Usable</th><th scope="col">Available</th></tr></thead>
-      <tbody>${counts.map((c) => {
-        const id = `${c.provider}|${c.level}`;
-        const isRule = !!rule && rule.provider === c.provider && rule.level === c.level;
-        const isUsed = !!used && used.provider === c.provider && used.level === c.level;
-        const tag = isUsed && S.levelOverride ? `<span class="stamp carbon">your choice</span>` : isRule ? `<span class="stamp ok">rule's choice</span>` : "";
-        return `<tr class="${isUsed ? "chosen" : ""}${isRule ? " rule" : ""}"><td><input type="radio" name="lvl" value="${esc(id)}" aria-label="Use ${esc(levelName(c))}" ${isUsed ? "checked" : ""} ${!c.available || live || running() ? "disabled" : ""}/></td>
-          <td><b>${esc(c.provider === "osm" ? `OSM ${c.level}` : c.level)}</b> ${tag}</td><td class="num">${c.available ? c.touched : "-"}</td><td class="num">${c.available ? c.usable : "-"}</td>
-          <td>${c.available ? (c.note ? esc(c.note) : "yes") : `<span class="muted-cell">no</span>`}</td></tr>`;
-      }).join("")}</tbody></table>`;
-  };
   if (L.status === "running") {
-    const probed = L.probed.map((p) => ({ provider: p.provider, level: p.level, available: p.state !== "missing", touched: 0, usable: 0, note: p.state }));
-    return `<p class="lvl-progress" role="status"><span class="spinner-inline" aria-hidden="true"></span>Counting districts per level${L.probing ? `… probing ${esc(levelName(L.probing))}` : "…"} (${L.probed.length} done). Each level is downloaded once, then cached.</p>
-      ${probed.length ? rowsFor(probed, true) : ""}`;
+    return `<p class="lvl-progress" role="status"><span class="spinner-inline" aria-hidden="true"></span>Checking district levels… ${L.probed.length} done. Each level is downloaded once, then cached.</p>${levelRows(L)}`;
   }
   if (L.status === "failed") {
     return `<div class="note block" role="alert"><span class="ic">${icon("alert")}</span><b>Couldn't choose a district level</b><p>${esc(plainError(L.error ?? ""))}</p>
-      <details class="line-raw"><summary>Error details</summary><code>${esc(L.error ?? "")}</code></details>
-      <div class="note-actions"><button class="btn btn-sm" type="button" id="lvl-retry"><span class="ic">${icon("retry")}</span>Retry</button></div></div>`;
+      <details class="line-raw" data-keep="levels-err"><summary>Error details</summary><code>${esc(L.error ?? "")}</code></details>
+      <div class="note-actions"><button class="btn btn-sm" type="button" id="lvl-retry"><span class="ic">${icon("retry")}</span>Retry</button></div></div>${levelRows(L)}`;
   }
   const c = L.choice!;
   return `<p class="lvl-reason">${S.levelOverride ? `Using <b>${esc(levelName(S.levelOverride))}</b> (your choice). The rule picked ${esc(levelName(c))}: ${esc(c.reason)}.`
       : `The rule picked <b>${esc(levelName(c))}</b>: ${esc(c.reason)}.`}</p>
     ${c.in_range ? "" : `<div class="note warn"><span class="ic">${icon("alert")}</span><b>No level has 10-100 usable districts; using the closest.</b><p>Pick another level below if a different one fits better.</p></div>`}
-    ${rowsFor(c.counts, false)}
-    <p class="hint">Usable: ${S.mode === "snap" ? `districts at least ${pct(S.minShare)} inside the drawing` : "every district the drawing touches"}. Pick a row to use that level instead.</p>
+    ${levelRows(L)}
+    <p class="hint">Districts: ${S.mode === "snap" ? `those at least ${pct(S.minShare)} inside the drawing` : "every district the drawing touches"}. Pick a level to use it instead.</p>
     ${S.levelOverride ? `<button class="btn btn-sm" type="button" id="lvl-reset">Use the rule's choice</button>` : ""}`;
 }
 
@@ -328,7 +361,7 @@ function renderSnap(): void {
   const u = usedLevel();
   const rule = `<p class="snap-rule">${u ? `Districts: <b>${esc(levelName(u))}</b> (${S.levelOverride ? "your choice" : "chosen by the rule"}). ` : ""}A district is included when at least <b>${pct(S.minShare)}</b> of it is inside the drawing (change it under Advanced). Click a district on the map, or tick it here, to add or remove it.</p>`;
   if (S.levels?.status === "running") {
-    p.innerHTML = `<h3 class="snap-head" id="snap-head">Districts in the drawing<span>choosing the level…</span></h3>${rule}<p class="lvl-progress" style="padding:8px 12px"><span class="spinner-inline" aria-hidden="true"></span>Counting districts per level${S.levels.probing ? `: ${esc(levelName(S.levels.probing))}` : ""}…</p>`;
+    p.innerHTML = `<h3 class="snap-head" id="snap-head">Districts in the drawing<span>choosing the level…</span></h3>${rule}<p class="lvl-progress" style="padding:8px 12px"><span class="spinner-inline" aria-hidden="true"></span>Checking district levels${S.levels.in_progress?.length ? `: ${S.levels.in_progress.map((x) => esc(shortLevel(x))).join(", ")}` : ""}… (details in 3 · Sources, Districts)</p>`;
     return;
   }
   if (S.levels?.status === "failed") {
@@ -347,7 +380,7 @@ function renderSnap(): void {
   if (!r) { p.innerHTML = ""; return; }
   if (r.error?.code === "boundaries_failed") {
     p.innerHTML = `<h3 class="snap-head" id="snap-head">Districts in the drawing</h3><div class="note block" role="alert"><span class="ic">${icon("alert")}</span><b>Couldn't get the districts for the drawing</b>
-      <p>Snapping needs the districts first. ${esc(plainError(r.error.message))}</p><details class="line-raw"><summary>Error details</summary><code>${esc(r.error.message)}</code></details>
+      <p>Snapping needs the districts first. ${esc(plainError(r.error.message))}</p><details class="line-raw" data-keep="snap-err"><summary>Error details</summary><code>${esc(r.error.message)}</code></details>
       <div class="note-actions"><button class="btn btn-sm" type="button" id="snap-retry"><span class="ic">${icon("retry")}</span>Retry</button><button class="btn btn-sm btn-quiet" type="button" data-set-mode="free">Use the free polygon instead</button></div></div>`;
     return;
   }
@@ -862,12 +895,13 @@ function planSentence(): string {
 function fetchBlockers(): string[] {
   const why: string[] = [];
   if (running()) return ["Fetching… inputs are locked until it finishes."];
+  if (prepRunning()) return ["Preprocessing is running. Fetch is available again when it finishes."];
   if (!S.name.trim()) why.push("name");
   if (!S.iso3) why.push("country");
   if (!S.geom) why.push("area");
   if (why.length) return [`Missing: ${why.join(", ")}.`];
   if (S.validation && !S.validation.ok) return ["Fix the area first (see 1 · Area)."];
-  if (S.levels?.status === "running") return ["Counting districts per level…"];
+  if (S.levels?.status === "running") return ["Checking district levels…"];
   if (S.levels?.status === "failed") return ["No district level could be chosen (see the Districts source)."];
   if (S.mode === "snap") {
     if (S.snapping && !S.snap) return ["Snapping to whole districts…"];
@@ -915,7 +949,7 @@ function lineFor(row: JobRow | null, src: string, i: number): string {
   const glyph = row.status === "running" ? icon("clock") : row.status === "failed" ? icon("alert") : row.status === "queued" ? icon("queued") : icon("check");
   const retry = row.status === "failed" && !S.job?.running ? `<button class="btn btn-sm" type="button" data-retry="${src}"><span class="ic">${icon("retry")}</span>Retry</button>` : "";
   return `<li class="line"><span class="line-no">${two(i)}</span><span><span class="line-name">${name}</span>${subText ? `<span class="line-sub">${sub(subText)}</span>` : ""}
-    ${row.error ? `<span class="line-err">${esc(plainError(row.error))}</span><details class="line-raw"><summary>Error details</summary><code>${esc(row.error)}</code></details>` : ""}${bar}</span>
+    ${row.error ? `<span class="line-err">${esc(plainError(row.error))}</span><details class="line-raw" data-keep="err-${src}"><summary>Error details</summary><code>${esc(row.error)}</code></details>` : ""}${bar}</span>
     <span class="line-right"><span class="stamp ${cls}" data-stamp="${src}:${row.status}:${row.attempts}"><span class="ic">${glyph}</span>${word}</span>${retry}</span></li>`;
 }
 
@@ -934,7 +968,7 @@ function areaLine(): string {
       failed: ["Failed", "bad", "", icon("alert")],
     }[a.status] as [string, string, string, string];
     if (a.status === "failed" && a.error) {
-      err = `<span class="line-err">${esc(plainError(a.error))} Nothing else was fetched.</span><details class="line-raw"><summary>Error details</summary><code>${esc(a.error)}</code></details>`;
+      err = `<span class="line-err">${esc(plainError(a.error))} Nothing else was fetched.</span><details class="line-raw" data-keep="err-area"><summary>Error details</summary><code>${esc(a.error)}</code></details>`;
       if (!S.job?.running) retryBtn = `<button class="btn btn-sm" type="button" data-retry="area"><span class="ic">${icon("retry")}</span>Retry</button>`;
     }
   } else if (!snapMode) {
@@ -1000,11 +1034,156 @@ $("job-notes").addEventListener("click", (e) => {
   if ((e.target as HTMLElement).closest("#retry-all")) retry(S.job!.sources.filter((r) => r.status === "failed").map((r) => r.source));
 });
 
-async function startFetch(): Promise<void> {
+// ── preprocess: after a successful fetch, prepare the area for planning (leg.prep, server side) ──
+const prepArea = (): string => S.job?.area?.area_id ?? (S.job && !S.job.running ? S.job.area_id : "");
+
+function rememberFetched(j: Job): void {
+  const id = j.area?.area_id ?? j.area_id;
+  if (!id) return;
+  const m = (S.fetched[id] ??= {});
+  for (const r of j.sources) if ((r.status === "done" || r.status === "reused") && r.result) m[r.source] = r.result.snapshot_id;
+}
+
+/** Sources preprocessing needs that this area has no fetched (or cached, reusable) snapshot of. */
+function prepMissing(): string[] {
+  const id = prepArea();
+  const have = S.fetched[id] ?? {};
+  return PREP_NEEDS.filter((s) => !have[s] && S.plan?.[s]?.decision !== "reuse");
+}
+
+async function startPrep(): Promise<void> {
+  const area_id = prepArea();
+  if (!area_id || prepRunning()) return;
+  S.prepStarting = true; S.prepError = ""; renderPrep(); renderManifest();
+  try {
+    const r = await api.prep({ area_id, pinned: { ...(S.fetched[area_id] ?? {}) }, max_minutes: 120 });
+    S.prep = { job_id: r.job_id, area_id, status: "queued", running: true, stage: null, stage_label: "", stage_index: 0, stages: 5,
+      percent: 0, elapsed_s: 0, eta_s: null, error: null, warnings: [], output: null };
+    announce("Preprocessing started.");
+  } catch (e) {
+    const err = e as ApiError;
+    const busy = (err.detail as { detail?: { job_id?: string } })?.detail?.job_id;
+    if (err.status === 409 && busy) {           // another run of preprocessing: attach to it
+      S.prep = { job_id: busy, area_id, status: "running", running: true, stage: null, stage_label: "", stage_index: 0, stages: 5,
+        percent: 0, elapsed_s: 0, eta_s: null, error: null, warnings: [], output: null };
+      announce("Preprocessing is already running; following it.");
+    } else {
+      S.prepError = err.message;
+    }
+  }
+  S.prepStarting = false;
+  renderPrep(); renderManifest();
+  if (S.prep && prepRunning()) pollPrep();
+}
+
+let prepTimer = 0;
+let lastStage = "";
+async function pollPrep(): Promise<void> {
+  clearTimeout(prepTimer);
+  if (!S.prep) return;
+  try {
+    const j = await api.prepJob(S.prep.job_id);
+    if (j.stage && j.stage !== lastStage && j.status === "running") {
+      lastStage = j.stage;
+      announce(`Preprocessing step ${j.stage_index} of ${j.stages}: ${j.stage_label}.`);
+    }
+    S.prep = j;
+    if (j.status === "done") { announce(`Preprocessing finished: ${fmtInt(j.output?.totals.cells ?? 0)} cells.`); lastStage = ""; loadPrepRuns(true); }
+    if (j.status === "failed") { announce("Preprocessing failed. Retry is available."); lastStage = ""; }
+  } catch (e) {
+    S.prepError = e instanceof ApiError && e.status === 404 ? "This run is unknown: the server was restarted. Finished runs are listed under Earlier runs." : (e as Error).message;
+    S.prep = null;
+  }
+  renderPrep(); renderManifest();
+  if (S.prep && prepRunning()) prepTimer = window.setTimeout(pollPrep, 500);
+}
+
+async function loadPrepRuns(force = false): Promise<void> {
+  const id = prepArea();
+  if (!id || (!force && S.prepRunsFor === id)) return;
+  try { S.prepRuns = (await api.prepRuns(id)).runs; S.prepRunsFor = id; } catch { S.prepRuns = []; }
+  renderPrep();
+}
+
+const secs = (s: number) => (s < 60 ? `${Math.round(s)} s` : `${Math.floor(s / 60)} min ${Math.round(s % 60)} s`);
+
+function prepSummary(o: PrepOutput, warnings: string[]): string {
+  const t = o.totals;
+  const share = t.population ? t.covered_population / t.population : 0;
+  const files = Object.entries(o.files).map(([f, b]) => `<span class="mono">${esc(f)}</span><span>${size(b)}</span>`).join("");
+  const notes = [
+    ...warnings.map((w) => `<p class="quiet"><span class="ic">${icon("info")}</span>${esc(w)}</p>`),
+    o.dropped_facilities ? `<p class="quiet"><span class="ic">${icon("info")}</span>${fmtInt(o.dropped_facilities)} existing facilit${o.dropped_facilities === 1 ? "y is" : "ies are"} too far from any populated cell and ${o.dropped_facilities === 1 ? "was" : "were"} left out.</p>` : "",
+    o.unassigned?.cells ? `<p class="quiet"><span class="ic">${icon("info")}</span>${fmtInt(o.unassigned.cells)} cells (${fmtInt(o.unassigned.population)} people) are in no district.</p>` : "",
+  ].join("");
+  return `<dl class="prep-figs">
+      <div><dt>Cells</dt><dd>${fmtInt(t.cells)}</dd></div>
+      <div><dt>Districts</dt><dd>${fmtInt(t.districts)}</dd></div>
+      <div><dt>Population</dt><dd>${fmtInt(t.population)}</dd></div>
+      <div><dt>Within 2 h of a facility</dt><dd>${(share * 100).toFixed(1)}% <small>${fmtInt(t.covered_population)} people</small></dd></div>
+      <div><dt>Existing facilities</dt><dd>${fmtInt(t.existing_facilities)}</dd></div>
+      <div><dt>Planning year</dt><dd>${o.planning_year ?? "-"}</dd></div>
+    </dl>${notes}
+    <div class="files" style="margin:0">${files}</div>
+    <p class="prep-time">Run <span class="mono">${esc(o.run_id)}</span></p>`;
+}
+
+function renderPrep(): void {
+  const el = $("prep");
+  const id = prepArea();
+  el.hidden = !id && !S.prep;
+  if (el.hidden) return;
+  const p = S.prep && S.prep.area_id === id ? S.prep : null;
+  const missing = prepMissing();
+  const busyFetch = running();
+  let body = "";
+  if (p && (p.status === "running" || p.status === "queued")) {
+    const pct = Math.max(0, Math.min(100, Math.round(p.percent)));
+    body = `<div class="prep-bar" role="progressbar" aria-label="Preprocessing" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-valuetext="${pct}%, step ${p.stage_index} of ${p.stages}"><i style="width:${pct}%"></i></div>
+      <p class="prep-step">${p.stage_index ? `Step ${p.stage_index} of ${p.stages} · ${esc(p.stage_label)}` : "Starting…"}</p>
+      <p class="prep-time">${pct}% · ${secs(p.elapsed_s)} elapsed${p.eta_s != null ? ` · about ${secs(p.eta_s)} left` : ""}</p>`;
+  } else if (p?.status === "failed") {
+    body = `<div class="note block" role="alert"><span class="ic">${icon("alert")}</span><b>Preprocessing failed</b><p>${esc(prepPlain(p.error ?? ""))}</p>
+      <details class="line-raw" data-keep="prep-err"><summary>Error details</summary><code>${esc(p.error ?? "")}</code></details>
+      <div class="note-actions"><button class="btn btn-sm" type="button" id="prep-retry" ${busyFetch ? "disabled" : ""}><span class="ic">${icon("retry")}</span>Retry</button></div></div>`;
+  } else if (p?.status === "done" && p.output) {
+    body = prepSummary(p.output, p.warnings) + `<button class="btn btn-sm" type="button" id="prep-start" ${busyFetch || missing.length ? "disabled" : ""}>Prepare again</button>`;
+  } else {
+    const need = missing.map((s) => label(s).toLowerCase()).join(", ");
+    const friction = missing.includes("friction");
+    body = `<p class="hint">Builds the planning grid from the fetched data: people per cell, districts, walking times to existing facilities (up to 2 hours). This can take several minutes.</p>
+      <button class="btn btn-primary btn-block" type="button" id="prep-start" ${missing.length || busyFetch ? "disabled" : ""} aria-describedby="prep-why">Prepare data for planning</button>
+      <p class="why" id="prep-why">${busyFetch ? "Wait for the fetch to finish." : missing.length ? `Needs ${esc(need)}${friction ? ". Walking friction is needed to compute walking times" : ""}.` : ""}</p>
+      ${friction && !busyFetch ? `<button class="btn btn-sm" type="button" id="prep-fetch-friction"><span class="ic">${icon("plus")}</span>Fetch walking friction</button>` : ""}
+      ${S.prepError ? `<p class="field-error"><span class="ic">${icon("alert")}</span>${esc(S.prepError)}</p>` : ""}`;
+  }
+  const runs = S.prepRunsFor === id ? S.prepRuns.filter((r) => r.run_id !== p?.output?.run_id) : [];
+  const earlier = runs.length ? `<details class="advanced" data-keep="prep-runs"><summary><span class="ic">${icon("chevron")}</span>Earlier runs (${runs.length})</summary>
+      <ul class="runs">${runs.map((r) => `<li><span class="mono">${esc(r.run_id)}</span><span>${fmtInt(r.totals.cells)} cells</span>
+        <span>${fmtInt(r.totals.population)} people · ${r.totals.population ? ((r.totals.covered_population / r.totals.population) * 100).toFixed(1) : "0"}% within 2 h</span><span>${fmtInt(r.totals.districts)} districts</span></li>`).join("")}</ul></details>` : "";
+  el.innerHTML = `<h2 id="prep-head">Prepare data for planning<span>${p?.status === "done" ? "done" : p?.status === "failed" ? "failed" : prepRunning() ? "running" : ""}</span></h2>${body}${earlier}`;
+}
+
+function prepPlain(raw: string): string {
+  if (/MemoryError/.test(raw)) return "The area is too large to prepare in memory. Draw a smaller area or use larger cells.";
+  if (/FileNotFoundError|No snapshot/.test(raw)) return "Some fetched data is missing. Fetch the area again, then retry.";
+  return raw.split("\n")[0];
+}
+
+$("prep").addEventListener("click", (e) => {
+  const t = e.target as HTMLElement;
+  if (t.closest("#prep-start") || t.closest("#prep-retry")) { startPrep(); return; }
+  if (t.closest("#prep-fetch-friction")) {
+    S.included.add("friction"); persist(); renderSources();
+    startFetch(["friction"]);
+  }
+});
+
+async function startFetch(only?: string[]): Promise<void> {
   const a = areaIn();
   if (!a || fetchBlockers().length) return;
   S.starting = true; S.jobError = ""; renderAll();
-  const sources = S.specs.map((s) => s.source).filter((s) => S.included.has(s));
+  const sources = only ?? S.specs.map((s) => s.source).filter((s) => S.included.has(s));
   const options = Object.fromEntries(Object.entries(S.overrides).filter(([s]) => sources.includes(s)));
   const pinned = Object.fromEntries(Object.entries(S.pinned).filter(([s]) => sources.includes(s)));
   try {
@@ -1021,7 +1200,7 @@ async function startFetch(): Promise<void> {
   S.starting = false;
   renderAll();
 }
-$("fetch-btn").addEventListener("click", startFetch);
+$("fetch-btn").addEventListener("click", () => startFetch());
 
 async function retry(sources: string[]): Promise<void> {
   if (!S.job) return;
@@ -1051,7 +1230,8 @@ async function poll(): Promise<void> {
     S.job = j;
     if (wasRunning && !j.running) {
       announce(`Fetch finished: ${j.counts.reused + j.counts.done} ready, ${j.counts.failed} failed.`);
-      loadLayers(); refreshSaved(); loadPlan();
+      rememberFetched(j);
+      loadLayers(); refreshSaved(); loadPlan(); loadPrepRuns();
     }
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) {
@@ -1074,7 +1254,13 @@ function summaryText(src: string, s: Record<string, unknown>): string {
   if (src === "osm_facilities") return `${n("facilities")} facilities`;
   if (src === "osm_roads") return `${n("ways")} road segments`;
   if (src === "gtfs") return `${n("feeds")} feed${s.feeds === 1 ? "" : "s"}${Number(s.skipped_over_limit) ? ` · ${s.skipped_over_limit} skipped over the limit` : ""}`;
-  return JSON.stringify(s);
+  if (src === "friction") {
+    const res = Number(s.res_deg ?? 0);
+    return `${n("valid_pixels")} of ${n("pixels")} pixels with data${res ? ` · ~${(res * 111).toFixed(1)} km cells` : ""}`;
+  }
+  if (src === "public_facilities") return s.facilities != null ? `${n("facilities")} public facilities` : String(s.note ?? s.reason ?? "no facilities");
+  // any other source: its summary as readable "key: value" pairs, never raw JSON
+  return Object.entries(s).map(([k, v]) => `${k.replace(/_/g, " ")}: ${typeof v === "number" ? fmtInt(v) : typeof v === "object" ? "…" : v}`).join(" · ");
 }
 const size = (b: number) => (b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${(b / 1e3).toFixed(1)} KB`);
 const when = (iso: string) => new Date(iso).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", timeZone: "UTC" }) + " UTC";
@@ -1315,6 +1501,7 @@ function keepFocus(render: () => void): void {
 }
 
 function renderAll(): void {
+  renderPrep();
   renderMode();
   renderSnap();
   renderReadout();
@@ -1327,6 +1514,20 @@ function renderAll(): void {
   renderLayersPanel();
   renderLock();
 }
+
+// ── disclosures survive re-renders: panels are rebuilt on every poll, so remember which are open ──
+const openKeys = new Set<string>();
+document.addEventListener("toggle", (e) => {
+  const d = e.target as HTMLDetailsElement;
+  const k = d.dataset?.keep;
+  if (k) (d.open ? openKeys.add(k) : openKeys.delete(k));
+}, true);
+new MutationObserver(() => {
+  for (const k of openKeys) {
+    const d = document.querySelector<HTMLDetailsElement>(`details[data-keep="${CSS.escape(k)}"]:not([open])`);
+    if (d) d.open = true;
+  }
+}).observe(document.body, { childList: true, subtree: true });
 
 // ── boot ─────────────────────────────────────────────────────────────
 async function boot(): Promise<void> {
